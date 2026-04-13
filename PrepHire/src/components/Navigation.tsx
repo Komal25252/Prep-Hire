@@ -4,6 +4,7 @@ import Link from "next/link";
 import { BarChart3, Menu, LogOut, User } from "lucide-react";
 import { useSession, signOut, signIn } from "next-auth/react";
 import { useState, useEffect } from "react";
+import ThemeToggle from "@/components/ThemeToggle";
 
 export default function Navigation() {
   const { data: session, status } = useSession();
@@ -51,46 +52,83 @@ export default function Navigation() {
   };
 
   return (
-    <nav style={{ backgroundColor: '#2C2B30' }} className="text-white shadow-lg border-b border-[#4F4F51]">
+    <nav
+      style={{ backgroundColor: 'var(--color-background)', borderBottomColor: 'var(--color-border)' }}
+      className="text-white shadow-lg border-b"
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <Link href="/" className="flex items-center gap-2">
-            <BarChart3 className="w-8 h-8" style={{ color: '#F58F7C' }} />
-            <span className="text-2xl font-bold" style={{ color: '#F2C4CE' }}>PrepHire</span>
+            <BarChart3 className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
+            <span className="text-2xl font-bold" style={{ color: 'var(--color-secondary)' }}>PrepHire</span>
           </Link>
 
           <div className="hidden md:flex items-center gap-8">
-            <Link href="/" className="hover:text-[#F2C4CE] transition text-[#D6D6D6]">Home</Link>
-            <Link href="/prepare" className="hover:text-[#F2C4CE] transition text-[#D6D6D6]">Prepare</Link>
-            <Link href="/dashboard" className="hover:text-[#F2C4CE] transition text-[#D6D6D6]">Dashboard</Link>
+            <Link href="/" className="transition" style={{ color: 'var(--color-text)' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-secondary)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text)')}>Home</Link>
+            <Link href="/prepare" className="transition" style={{ color: 'var(--color-text)' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-secondary)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text)')}>Prepare</Link>
+            <Link href="/dashboard" className="transition" style={{ color: 'var(--color-text)' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-secondary)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text)')}>Dashboard</Link>
+
+            <ThemeToggle />
 
             {status === "loading" ? (
-              <div className="w-24 h-8 bg-[#4F4F51] animate-pulse rounded-md" />
+              <div className="w-24 h-8 animate-pulse rounded-md" style={{ backgroundColor: 'var(--color-card)' }} />
             ) : session ? (
               <div className="relative">
-                <button onClick={() => setShowProfileMenu(!showProfileMenu)} className="flex items-center gap-2 hover:text-[#F2C4CE] transition focus:outline-none">
+                <button
+                  onClick={() => setShowProfileMenu(!showProfileMenu)}
+                  className="flex items-center gap-2 transition focus:outline-none"
+                  style={{ color: 'var(--color-text)' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-secondary)')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text)')}
+                >
                   {session.user?.image ? (
-                    <img src={session.user.image} alt="Profile" className="w-8 h-8 rounded-full border-2 border-[#F58F7C]" />
+                    <img src={session.user.image} alt="Profile" className="w-8 h-8 rounded-full border-2" style={{ borderColor: 'var(--color-accent)' }} />
                   ) : (
-                    <div className="w-8 h-8 rounded-full bg-[#4F4F51] flex items-center justify-center border-2 border-[#F58F7C]">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center border-2" style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-accent)' }}>
                       <User className="w-5 h-5" />
                     </div>
                   )}
                   <span className="font-medium hidden lg:block">{session.user?.name?.split(" ")[0]}</span>
                 </button>
                 {showProfileMenu && (
-                  <div className="absolute right-0 mt-2 w-48 rounded-lg shadow-xl py-2 z-50 border border-[#4F4F51]" style={{ backgroundColor: '#2C2B30' }}>
-                    <Link href="/profile" className="block px-4 py-2 text-[#D6D6D6] hover:bg-[#4F4F51] hover:text-[#F2C4CE] transition" onClick={() => setShowProfileMenu(false)}>
+                  <div
+                    className="absolute right-0 mt-2 w-48 rounded-lg shadow-xl py-2 z-50 border"
+                    style={{ backgroundColor: 'var(--color-background)', borderColor: 'var(--color-border)' }}
+                  >
+                    <Link
+                      href="/profile"
+                      className="block px-4 py-2 transition"
+                      style={{ color: 'var(--color-text)' }}
+                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--color-card)'; e.currentTarget.style.color = 'var(--color-secondary)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--color-text)'; }}
+                      onClick={() => setShowProfileMenu(false)}
+                    >
                       Profile Settings
                     </Link>
-                    <button onClick={() => signOut({ callbackUrl: "/" })} className="w-full text-left px-4 py-2 text-[#D6D6D6] hover:bg-[#4F4F51] flex items-center gap-2 hover:text-[#F58F7C] transition">
+                    <button
+                      onClick={() => signOut({ callbackUrl: "/" })}
+                      className="w-full text-left px-4 py-2 flex items-center gap-2 transition"
+                      style={{ color: 'var(--color-text)' }}
+                      onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'var(--color-card)'; e.currentTarget.style.color = 'var(--color-accent)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.color = 'var(--color-text)'; }}
+                    >
                       <LogOut className="w-4 h-4" /> Sign Out
                     </button>
                   </div>
                 )}
               </div>
             ) : (
-              <button onClick={() => setShowAuthModal(true)} className="px-5 py-2 rounded-full font-semibold transition shadow-sm" style={{ backgroundColor: '#F58F7C', color: '#2C2B30' }}>
+              <button
+                onClick={() => setShowAuthModal(true)}
+                className="px-5 py-2 rounded-full font-semibold transition shadow-sm"
+                style={{ backgroundColor: 'var(--color-accent)', color: 'var(--color-background)' }}
+              >
                 Sign Up
               </button>
             )}
@@ -101,18 +139,35 @@ export default function Navigation() {
 
       {showAuthModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div className="rounded-2xl shadow-xl w-full max-w-md p-8 relative border border-[#4F4F51]" style={{ backgroundColor: '#2C2B30' }}>
-            <button onClick={closeModal} className="absolute top-4 right-4 text-[#D6D6D6] hover:text-white transition">✕</button>
+          <div
+            className="rounded-2xl shadow-xl w-full max-w-md p-8 relative border"
+            style={{ backgroundColor: 'var(--color-background)', borderColor: 'var(--color-border)' }}
+          >
+            <button
+              onClick={closeModal}
+              className="absolute top-4 right-4 transition"
+              style={{ color: 'var(--color-text)' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'white')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text)')}
+            >✕</button>
             <div className="flex flex-col items-center mb-6">
               <div className="flex items-center gap-2 mb-4">
-                <BarChart3 className="w-8 h-8" style={{ color: '#F58F7C' }} />
-                <span className="text-2xl font-bold" style={{ color: '#F2C4CE' }}>PrepHire</span>
+                <BarChart3 className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
+                <span className="text-2xl font-bold" style={{ color: 'var(--color-secondary)' }}>PrepHire</span>
               </div>
               <h1 className="text-2xl font-bold text-white mb-1">{isSignUp ? "Create an account" : "Welcome back"}</h1>
-              <p className="text-[#D6D6D6] text-sm text-center">{isSignUp ? "Sign up to start your AI interview preparation" : "Log in to continue your interview preparation"}</p>
+              <p className="text-sm text-center" style={{ color: 'var(--color-text)' }}>
+                {isSignUp ? "Sign up to start your AI interview preparation" : "Log in to continue your interview preparation"}
+              </p>
             </div>
 
-            <button onClick={() => signIn("google", { callbackUrl: "/" })} className="w-full flex items-center justify-center gap-3 border border-[#4F4F51] rounded-lg px-6 py-3 text-[#D6D6D6] font-medium hover:bg-[#4F4F51] transition mb-4" style={{ backgroundColor: '#2C2B30' }}>
+            <button
+              onClick={() => signIn("google", { callbackUrl: "/" })}
+              className="w-full flex items-center justify-center gap-3 rounded-lg px-6 py-3 font-medium transition mb-4 border"
+              style={{ backgroundColor: 'var(--color-background)', borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+              onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--color-card)')}
+              onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'var(--color-background)')}
+            >
               <svg className="w-5 h-5" viewBox="0 0 24 24">
                 <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4" />
                 <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
@@ -123,29 +178,59 @@ export default function Navigation() {
             </button>
 
             <div className="flex items-center gap-3 mb-4">
-              <div className="flex-1 h-px bg-[#4F4F51]" />
-              <span className="text-xs text-[#D6D6D6]">or</span>
-              <div className="flex-1 h-px bg-[#4F4F51]" />
+              <div className="flex-1 h-px" style={{ backgroundColor: 'var(--color-border)' }} />
+              <span className="text-xs" style={{ color: 'var(--color-text)' }}>or</span>
+              <div className="flex-1 h-px" style={{ backgroundColor: 'var(--color-border)' }} />
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3">
               {isSignUp && (
-                <input type="text" placeholder="Full name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required
-                  className="w-full border border-[#4F4F51] rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F58F7C]" style={{ backgroundColor: '#4F4F51' }} />
+                <input
+                  type="text"
+                  placeholder="Full name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                  className="w-full rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 border"
+                  style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)', outlineColor: 'var(--color-accent)' }}
+                />
               )}
-              <input type="email" placeholder="Email address" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required
-                className="w-full border border-[#4F4F51] rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F58F7C]" style={{ backgroundColor: '#4F4F51' }} />
-              <input type="password" placeholder="Password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required
-                className="w-full border border-[#4F4F51] rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#F58F7C]" style={{ backgroundColor: '#4F4F51' }} />
-              {error && <p className="text-[#F58F7C] text-sm">{error}</p>}
-              <button type="submit" disabled={loading} className="w-full rounded-lg px-6 py-2.5 font-semibold hover:opacity-90 transition disabled:opacity-60" style={{ backgroundColor: '#F58F7C', color: '#2C2B30' }}>
+              <input
+                type="email"
+                placeholder="Email address"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
+                className="w-full rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 border"
+                style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)', outlineColor: 'var(--color-accent)' }}
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required
+                className="w-full rounded-lg px-4 py-2.5 text-white text-sm focus:outline-none focus:ring-2 border"
+                style={{ backgroundColor: 'var(--color-card)', borderColor: 'var(--color-border)', outlineColor: 'var(--color-accent)' }}
+              />
+              {error && <p className="text-sm" style={{ color: 'var(--color-accent)' }}>{error}</p>}
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full rounded-lg px-6 py-2.5 font-semibold hover:opacity-90 transition disabled:opacity-60"
+                style={{ backgroundColor: 'var(--color-accent)', color: 'var(--color-background)' }}
+              >
                 {loading ? "Please wait..." : isSignUp ? "Create Account" : "Log In"}
               </button>
             </form>
 
-            <p className="mt-6 text-center text-sm text-[#D6D6D6]">
+            <p className="mt-6 text-center text-sm" style={{ color: 'var(--color-text)' }}>
               {isSignUp ? "Already have an account?" : "Don't have an account?"}{" "}
-              <button onClick={() => { setIsSignUp(!isSignUp); setError(""); }} className="font-semibold hover:opacity-80 transition" style={{ color: '#F2C4CE' }}>
+              <button
+                onClick={() => { setIsSignUp(!isSignUp); setError(""); }}
+                className="font-semibold hover:opacity-80 transition"
+                style={{ color: 'var(--color-secondary)' }}
+              >
                 {isSignUp ? "Log in" : "Sign up"}
               </button>
             </p>

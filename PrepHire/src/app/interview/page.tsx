@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Mic, StopCircle, ChevronRight, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import Navigation from '@/components/Navigation';
+import WebcamPanel from '@/components/interview/WebcamPanel';
+import ChatPanel from '@/components/interview/ChatPanel';
 
 interface PrepareData {
   domain: string;
@@ -11,6 +12,13 @@ interface PrepareData {
   difficulty: 'easy' | 'moderate' | 'hard';
   questionCount: 5 | 10 | 15;
   interviewType: 'dsa' | 'audio';
+}
+
+interface ChatMessage {
+  id: string;
+  role: 'ai' | 'candidate';
+  text: string;
+  timestamp: number;
 }
 
 export default function InterviewPage() {
@@ -25,9 +33,10 @@ export default function InterviewPage() {
   const [status, setStatus] = useState<'active' | 'submitting'>('active');
   const [loadingQuestions, setLoadingQuestions] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [sessionTimeLeft, setSessionTimeLeft] = useState(0);
   const [fetchedBatches, setFetchedBatches] = useState(1);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isTypingIndicatorVisible, setIsTypingIndicatorVisible] = useState(false);
 
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -36,50 +45,35 @@ export default function InterviewPage() {
   // TTS helpers
   const speakQuestion = (text: string) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    
-    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
-    
-    // Small delay to ensure cancellation completes
     setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 0.9;
       utterance.pitch = 1;
       utterance.volume = 1;
       utterance.lang = 'en-US';
-      
-      // Get voices - they might not be loaded immediately
       let voices = window.speechSynthesis.getVoices();
-      
-      // If voices aren't loaded yet, wait for them
       if (voices.length === 0) {
         window.speechSynthesis.onvoiceschanged = () => {
           voices = window.speechSynthesis.getVoices();
-          const preferred = voices.find((v) => 
-            v.lang.startsWith('en') && 
+          const preferred = voices.find((v) =>
+            v.lang.startsWith('en') &&
             (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Female') || v.default)
           );
           if (preferred) utterance.voice = preferred;
         };
       } else {
-        // Voices already loaded
-        const preferred = voices.find((v) => 
-          v.lang.startsWith('en') && 
+        const preferred = voices.find((v) =>
+          v.lang.startsWith('en') &&
           (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Female') || v.default)
         );
         if (preferred) utterance.voice = preferred;
       }
-      
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
       utterance.onerror = (e) => {
-        // 'interrupted' fires when we cancel() to start a new utterance — not a real error
         if (e.error !== 'interrupted' && e.error !== 'canceled') {
           console.error('TTS error:', e.error);
         }
-        setIsSpeaking(false);
       };
-      
       window.speechSynthesis.speak(utterance);
     }, 100);
   };
@@ -87,7 +81,6 @@ export default function InterviewPage() {
   const stopSpeaking = () => {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
-      setIsSpeaking(false);
     }
   };
 
@@ -114,7 +107,6 @@ export default function InterviewPage() {
 
   // Initial load
   useEffect(() => {
-    // Preload voices for TTS consistency
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.getVoices();
       window.speechSynthesis.onvoiceschanged = () => {
@@ -139,6 +131,7 @@ export default function InterviewPage() {
         if (cancelled) return;
         if (json.questions?.length) {
           setQuestions(json.questions);
+          setMessages([{ id: crypto.randomUUID(), role: 'ai', text: json.questions[0], timestamp: Date.now() }]);
           const totalSeconds = (data.questionCount ?? 5) * 3 * 60;
           setSessionTimeLeft(totalSeconds);
           sessionTimerRef.current = setInterval(() => {
@@ -160,13 +153,21 @@ export default function InterviewPage() {
     };
   }, [router]);
 
+  // Auto-submit when session timer hits 0
+  useEffect(() => {
+    if (sessionTimeLeft === 0 && !loadingQuestions && status === 'active' && questions.length > 0) {
+      advance(currentResponse);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionTimeLeft]);
+
   // Auto-speak when question changes
   useEffect(() => {
     if (questions.length > 0 && questions[currentIndex]) {
-      // Small delay to let the browser settle before speaking
       const t = setTimeout(() => speakQuestion(questions[currentIndex]), 300);
       return () => clearTimeout(t);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, questions]);
 
   // Recording timer
@@ -178,12 +179,6 @@ export default function InterviewPage() {
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isRecording]);
-
-  const formatTime = (s: number) =>
-    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
-
-  const formatSessionTime = (s: number) =>
-    `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
 
   const startRecording = () => {
     setRecordingTime(0);
@@ -208,6 +203,11 @@ export default function InterviewPage() {
     recognitionRef.current = null;
   };
 
+  const handleMicToggle = () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  };
+
   const advance = (response: string) => {
     stopSpeaking();
     const updated = [...responses];
@@ -215,6 +215,7 @@ export default function InterviewPage() {
     setResponses(updated);
     setCurrentResponse('');
     setRecordingTime(0);
+    if (isRecording) stopRecording();
 
     const nextIndex = currentIndex + 1;
     const totalCount = prepareData?.questionCount ?? 5;
@@ -229,7 +230,13 @@ export default function InterviewPage() {
 
     if (nextIndex < totalCount) {
       setCurrentIndex(nextIndex);
+      setIsTypingIndicatorVisible(false);
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: 'ai', text: questions[nextIndex] ?? '...', timestamp: Date.now() },
+      ]);
     } else {
+      setIsTypingIndicatorVisible(false);
       setStatus('submitting');
       sessionStorage.setItem('interviewResults', JSON.stringify({
         domain: prepareData?.domain,
@@ -242,161 +249,136 @@ export default function InterviewPage() {
     }
   };
 
-  const handleNext = () => advance(currentResponse);
-  const handleSkip = () => advance('');
+  const handleSend = () => {
+    if (!currentResponse.trim()) return;
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: 'candidate', text: currentResponse, timestamp: Date.now() },
+    ]);
+    setIsTypingIndicatorVisible(true);
+    advance(currentResponse);
+  };
+
+  const handleSkip = () => {
+    advance('');
+  };
+
+  const handleEndInterview = () => {
+    const totalCount = prepareData?.questionCount ?? 5;
+    const padded = [...responses];
+    while (padded.length < totalCount) padded.push('');
+    sessionStorage.setItem('interviewResults', JSON.stringify({
+      domain: prepareData?.domain,
+      difficulty: prepareData?.difficulty,
+      questions,
+      responses: padded,
+      date: new Date().toISOString(),
+    }));
+    router.push('/results');
+  };
 
   if (!prepareData) return null;
 
   if (loadingQuestions) return (
-    <div className="min-h-screen" style={{ backgroundColor: '#2C2B30' }}>
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
       <Navigation />
       <div className="flex flex-col items-center justify-center py-40 gap-4">
         <div className="flex items-center gap-3">
-          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F58F7C', animationDelay: '0ms' }} />
-          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F2C4CE', animationDelay: '150ms' }} />
-          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F58F7C', animationDelay: '300ms' }} />
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-accent)', animationDelay: '0ms' }} />
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-secondary)', animationDelay: '150ms' }} />
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-accent)', animationDelay: '300ms' }} />
         </div>
-        <p className="text-lg" style={{ color: '#D6D6D6' }}>Generating your questions...</p>
+        <p className="text-lg" style={{ color: 'var(--color-text)' }}>Generating your questions...</p>
       </div>
     </div>
   );
 
   if (loadError) return (
-    <div className="min-h-screen" style={{ backgroundColor: '#2C2B30' }}>
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
       <Navigation />
       <div className="flex flex-col items-center justify-center py-40 gap-4">
-        <p className="text-lg" style={{ color: '#F58F7C' }}>{loadError}</p>
-        <button onClick={() => router.push('/prepare')} className="px-6 py-2 rounded-lg font-semibold" style={{ backgroundColor: '#F58F7C', color: '#2C2B30' }}>
+        <p className="text-lg" style={{ color: 'var(--color-accent)' }}>{loadError}</p>
+        <button onClick={() => router.push('/prepare')} className="px-6 py-2 rounded-lg font-semibold" style={{ backgroundColor: 'var(--color-accent)', color: 'var(--color-background)' }}>
           Go Back
         </button>
       </div>
     </div>
   );
 
-  return (
-    <div className="min-h-screen" style={{ backgroundColor: '#2C2B30' }}>
+  if (status === 'submitting') return (
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
       <Navigation />
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {status === 'active' && (
-          <div>
-            {/* Session badges */}
-            <div className="flex items-center gap-3 mb-6">
-              <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: '#4F4F51', color: '#F2C4CE' }}>
-                {prepareData.domain}
-              </span>
-              <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: '#4F4F51', color: '#F58F7C' }}>
-                {prepareData.difficulty.charAt(0).toUpperCase() + prepareData.difficulty.slice(1)}
-              </span>
-            </div>
+      <div className="text-center py-24">
+        <h1 className="text-4xl font-bold mb-4" style={{ color: 'var(--color-secondary)' }}>Session Complete!</h1>
+        <p className="text-xl mb-8" style={{ color: 'var(--color-text)' }}>Analyzing your responses...</p>
+        <div className="flex items-center gap-3 justify-center">
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-accent)', animationDelay: '0ms' }} />
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-secondary)', animationDelay: '150ms' }} />
+          <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: 'var(--color-accent)', animationDelay: '300ms' }} />
+        </div>
+      </div>
+    </div>
+  );
 
-            {/* Progress bar */}
-            <div className="mb-8">
-              <div className="flex justify-between items-center mb-2">
-                <h2 className="text-lg font-bold" style={{ color: '#D6D6D6' }}>
-                  Question {currentIndex + 1} of {prepareData.questionCount ?? 5}
-                </h2>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-mono font-bold px-3 py-1 rounded-full"
-                    style={{ backgroundColor: sessionTimeLeft < 60 ? '#F58F7C' : '#4F4F51', color: sessionTimeLeft < 60 ? '#2C2B30' : '#F2C4CE' }}>
-                    ⏱ {formatSessionTime(sessionTimeLeft)}
-                  </span>
-                  <span className="text-sm px-3 py-1 rounded-full" style={{ backgroundColor: '#4F4F51', color: '#D6D6D6' }}>
-                    {Math.round(((currentIndex + 1) / (prepareData.questionCount ?? 5)) * 100)}%
-                  </span>
-                </div>
-              </div>
-              <div className="w-full rounded-full h-2" style={{ backgroundColor: '#4F4F51' }}>
-                <div className="h-2 rounded-full transition-all" style={{ width: `${((currentIndex + 1) / (prepareData.questionCount ?? 5)) * 100}%`, backgroundColor: '#F58F7C' }} />
-              </div>
-            </div>
+  return (
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
+      <Navigation />
 
-            {/* Question card */}
-            <div className="rounded-xl p-8 mb-6 border border-[#4F4F51]" style={{ backgroundColor: '#4F4F51' }}>
-              <div className="flex items-start justify-between gap-4 mb-6">
-                <h2 className="text-2xl font-bold" style={{ color: '#F2C4CE' }}>{questions[currentIndex]}</h2>
-                <button
-                  onClick={() => isSpeaking ? stopSpeaking() : speakQuestion(questions[currentIndex])}
-                  className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition"
-                  style={{ backgroundColor: isSpeaking ? '#F2C4CE' : '#2C2B30', color: isSpeaking ? '#2C2B30' : '#F2C4CE' }}
-                >
-                  {isSpeaking ? <><VolumeX className="w-4 h-4" /> Stop</> : <><Volume2 className="w-4 h-4" /> Hear</>}
-                </button>
-              </div>
+      {/* Top bar with End Interview button */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'flex-end',
+          padding: '0.5rem 1rem',
+          backgroundColor: 'var(--color-background)',
+        }}
+      >
+        <button
+          onClick={handleEndInterview}
+          style={{
+            border: '1px solid var(--color-accent)',
+            color: 'var(--color-accent)',
+            backgroundColor: 'transparent',
+            borderRadius: '0.5rem',
+            padding: '0.375rem 0.875rem',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          End Interview
+        </button>
+      </div>
 
-              <div className="border-l-4 p-4 rounded mb-6" style={{ backgroundColor: '#2C2B30', borderColor: '#F58F7C' }}>
-                <p className="text-sm" style={{ color: '#D6D6D6' }}>
-                  💡 Tip: Use the STAR method — Situation, Task, Action, Result. Be specific and concise.
-                </p>
-              </div>
+      {/* Split-screen layout */}
+      <div
+        className="flex flex-col md:flex-row"
+        style={{ height: 'calc(100vh - 4rem)', overflow: 'hidden' }}
+      >
+        {/* Left: WebcamPanel ~40% */}
+        <div className="w-full md:w-2/5" style={{ flexShrink: 0, overflow: 'hidden' }}>
+          <WebcamPanel
+            domain={prepareData.domain}
+            difficulty={prepareData.difficulty}
+            questionCount={prepareData.questionCount}
+            sessionTimeLeft={sessionTimeLeft}
+          />
+        </div>
 
-              {/* Response area */}
-              <div className="border-2 rounded-lg p-6 mb-6" style={{ backgroundColor: '#2C2B30', borderColor: '#4F4F51' }}>
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <h3 className="font-bold" style={{ color: '#D6D6D6' }}>Your Response</h3>
-                    <p className="text-sm" style={{ color: '#D6D6D6' }}>Speak or type your answer</p>
-                  </div>
-                  {isRecording && (
-                    <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: '#F58F7C' }} />
-                      <span className="text-lg font-mono font-bold" style={{ color: '#F58F7C' }}>{formatTime(recordingTime)}</span>
-                    </div>
-                  )}
-                </div>
-
-                <textarea
-                  value={currentResponse}
-                  onChange={(e) => setCurrentResponse(e.target.value)}
-                  placeholder="Type your answer here, or use the microphone to speak..."
-                  rows={5}
-                  className="w-full rounded-lg p-3 resize-none focus:outline-none focus:ring-2 mb-4"
-                  style={{ backgroundColor: '#4F4F51', border: '1px solid #D6D6D6', color: '#D6D6D6' }}
-                />
-
-                <div className="flex gap-3">
-                  {!isRecording ? (
-                    <>
-                      <button onClick={startRecording} className="px-5 py-2 rounded-lg font-semibold flex items-center gap-2 transition hover:opacity-90" style={{ backgroundColor: '#F58F7C', color: '#2C2B30' }}>
-                        <Mic className="w-4 h-4" /> Start Speaking
-                      </button>
-                      <button onClick={handleSkip} className="border-2 px-5 py-2 rounded-lg font-semibold transition flex items-center gap-2 hover:opacity-80" style={{ borderColor: '#D6D6D6', color: '#D6D6D6' }}>
-                        <SkipForward className="w-4 h-4" /> Skip
-                      </button>
-                    </>
-                  ) : (
-                    <button onClick={stopRecording} className="px-5 py-2 rounded-lg font-semibold flex items-center gap-2 transition hover:opacity-90" style={{ backgroundColor: '#4F4F51', color: '#D6D6D6', border: '1px solid #D6D6D6' }}>
-                      <StopCircle className="w-4 h-4" /> Stop Speaking
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <button
-                  onClick={handleNext}
-                  disabled={!currentResponse.trim() || isRecording}
-                  className="px-8 py-3 rounded-lg font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition"
-                  style={{ backgroundColor: '#F58F7C', color: '#2C2B30' }}
-                >
-                  {currentIndex === (prepareData.questionCount ?? 5) - 1 ? 'Finish Interview' : 'Next Question'}
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {status === 'submitting' && (
-          <div className="text-center py-24">
-            <h1 className="text-4xl font-bold mb-4" style={{ color: '#F2C4CE' }}>Session Complete!</h1>
-            <p className="text-xl mb-8" style={{ color: '#D6D6D6' }}>Analyzing your responses...</p>
-            <div className="flex items-center gap-3 justify-center">
-              <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F58F7C', animationDelay: '0ms' }} />
-              <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F2C4CE', animationDelay: '150ms' }} />
-              <div className="w-3 h-3 rounded-full animate-bounce" style={{ backgroundColor: '#F58F7C', animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
+        {/* Right: ChatPanel ~60% */}
+        <div className="w-full md:w-3/5" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <ChatPanel
+            messages={messages}
+            inputText={currentResponse}
+            isRecording={isRecording}
+            recordingTime={recordingTime}
+            isTypingIndicatorVisible={isTypingIndicatorVisible}
+            onInputChange={setCurrentResponse}
+            onMicToggle={handleMicToggle}
+            onSend={handleSend}
+            onSkip={handleSkip}
+          />
+        </div>
       </div>
     </div>
   );

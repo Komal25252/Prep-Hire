@@ -4,13 +4,13 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 const MOCK_QUESTIONS: Record<string, string[]> = {
-  // default: [
-  //   "Tell me about yourself and your background.",
-  //   "What is your greatest technical strength?",
-  //   "Describe a challenging project you worked on.",
-  //   "How do you handle tight deadlines?",
-  //   "Where do you see yourself in 5 years?",
-  // ],
+  default: [
+    "Tell me about yourself and your background.",
+    "What is your greatest technical strength?",
+    "Describe a challenging project you worked on.",
+    "How do you handle tight deadlines?",
+    "Where do you see yourself in 5 years?",
+  ],
 };
 
 export async function POST(req: NextRequest) {
@@ -58,9 +58,10 @@ Return ONLY a JSON array of ${count} strings, no explanation, no numbering, no m
     const questions: string[] = JSON.parse(cleaned);
     return NextResponse.json({ questions });
   } catch (err: any) {
-    // Fall back to mock questions on quota errors
-    if (err?.message?.includes('429')) {
-      console.warn('Gemini quota exceeded, falling back to mock questions');
+    // Fall back to mock questions on quota, overload, or model errors
+    const status = err?.status ?? err?.message ?? '';
+    if (String(status).includes('429') || String(status).includes('503') || String(status).includes('404')) {
+      console.warn('Gemini unavailable, falling back to mock questions:', String(status));
       const base = MOCK_QUESTIONS[domain] ?? MOCK_QUESTIONS.default;
       const questions = Array.from({ length: count }, (_, i) => base[i % base.length]);
       return NextResponse.json({ questions });
