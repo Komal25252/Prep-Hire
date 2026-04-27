@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { Camera, Mic, ShieldCheck, ChevronRight, ArrowLeft } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import WebcamPanel from '@/components/interview/WebcamPanel';
 import ChatPanel from '@/components/interview/ChatPanel';
@@ -12,6 +13,7 @@ interface PrepareData {
   difficulty: 'easy' | 'moderate' | 'hard';
   questionCount: 5 | 10 | 15;
   interviewType: 'dsa' | 'audio';
+  resumeText?: string;
 }
 
 interface ChatMessage {
@@ -25,6 +27,7 @@ export default function InterviewPage() {
   const router = useRouter();
   const [prepareData, setPrepareData] = useState<PrepareData | null>(null);
   const [questions, setQuestions] = useState<string[]>([]);
+  const [isMockQuestion, setIsMockQuestion] = useState<boolean[]>([]); // tracks which questions were fallback
   const [currentIndex, setCurrentIndex] = useState(0);
   const [responses, setResponses] = useState<string[]>([]);
   const [currentResponse, setCurrentResponse] = useState('');
@@ -34,13 +37,15 @@ export default function InterviewPage() {
   const [loadingQuestions, setLoadingQuestions] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [sessionTimeLeft, setSessionTimeLeft] = useState(0);
-  const [fetchedBatches, setFetchedBatches] = useState(1);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTypingIndicatorVisible, setIsTypingIndicatorVisible] = useState(false);
+  const [showDisclaimer, setShowDisclaimer] = useState(true);
+  const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
 
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const sessionIdRef = useRef<string>(crypto.randomUUID());
 
   // TTS helpers
   const speakQuestion = (text: string) => {
@@ -84,34 +89,39 @@ export default function InterviewPage() {
     }
   };
 
-  // Fetch a batch of 5 questions
-  const fetchQuestions = async (data: PrepareData, append = false) => {
+  // Fetch a single adaptive question based on conversation history
+  const fetchNextQuestion = async (
+    data: PrepareData,
+    history: { question: string; answer: string }[],
+    questionNumber: number
+  ): Promise<{ question: string; isMock: boolean } | null> => {
     try {
       const res = await fetch('/api/questions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: data.domain, difficulty: data.difficulty, count: 5, interviewType: data.interviewType }),
+        body: JSON.stringify({
+          domain: data.domain,
+          difficulty: data.difficulty,
+          interviewType: data.interviewType,
+          history,
+          questionNumber,
+          resumeText: data.resumeText || undefined,
+          resumeId: (data as any).resumeId
+        }),
       });
       const json = await res.json();
-      if (json.questions?.length) {
-        setQuestions((prev) => append ? [...prev, ...json.questions] : json.questions);
-      } else {
-        setLoadError('Failed to load questions. Please try again.');
-      }
+      if (!json.question) return null;
+      return { question: json.question, isMock: json.isMock ?? false };
     } catch {
-      setLoadError('Network error. Please try again.');
-    } finally {
-      setLoadingQuestions(false);
+      return null;
     }
   };
 
-  // Initial load
+  // Initial load — fetch first question
   useEffect(() => {
     if (typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
+      window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
     }
 
     const raw = sessionStorage.getItem('prepareData');
@@ -121,31 +131,25 @@ export default function InterviewPage() {
     setResponses(Array(data.questionCount ?? 5).fill(''));
 
     let cancelled = false;
-    fetch('/api/questions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ domain: data.domain, difficulty: data.difficulty, count: 5, interviewType: data.interviewType }),
-    })
-      .then((r) => r.json())
-      .then((json) => {
-        if (cancelled) return;
-        if (json.questions?.length) {
-          setQuestions(json.questions);
-          setMessages([{ id: crypto.randomUUID(), role: 'ai', text: json.questions[0], timestamp: Date.now() }]);
-          const totalSeconds = (data.questionCount ?? 5) * 3 * 60;
-          setSessionTimeLeft(totalSeconds);
-          sessionTimerRef.current = setInterval(() => {
-            setSessionTimeLeft((t) => {
-              if (t <= 1) { clearInterval(sessionTimerRef.current!); return 0; }
-              return t - 1;
-            });
-          }, 1000);
-        } else {
-          setLoadError('Failed to load questions. Please try again.');
-        }
-      })
-      .catch(() => { if (!cancelled) setLoadError('Network error. Please try again.'); })
-      .finally(() => { if (!cancelled) setLoadingQuestions(false); });
+    fetchNextQuestion(data, [], 1).then((result) => {
+      if (cancelled) return;
+      if (result) {
+        setQuestions([result.question]);
+        setIsMockQuestion([result.isMock]);
+        setMessages([{ id: crypto.randomUUID(), role: 'ai', text: result.question, timestamp: Date.now() }]);
+        const totalSeconds = (data.questionCount ?? 5) * 3 * 60;
+        setSessionTimeLeft(totalSeconds);
+        sessionTimerRef.current = setInterval(() => {
+          setSessionTimeLeft((t) => {
+            if (t <= 1) { clearInterval(sessionTimerRef.current!); return 0; }
+            return t - 1;
+          });
+        }, 1000);
+      } else {
+        setLoadError('Failed to load questions. Please try again.');
+      }
+      setLoadingQuestions(false);
+    });
 
     return () => {
       cancelled = true;
@@ -161,14 +165,35 @@ export default function InterviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionTimeLeft]);
 
-  // Auto-speak when question changes
+  // Auto-speak when a new question arrives (only after disclaimer accepted)
   useEffect(() => {
-    if (questions.length > 0 && questions[currentIndex]) {
-      const t = setTimeout(() => speakQuestion(questions[currentIndex]), 300);
+    if (!disclaimerAccepted) return;
+    const q = questions[currentIndex];
+    if (q) {
+      const t = setTimeout(() => speakQuestion(q), 300);
       return () => clearTimeout(t);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentIndex, questions]);
+  }, [questions, currentIndex, disclaimerAccepted]);
+
+  // Auto-start mic when a new question appears (only after disclaimer accepted)
+  useEffect(() => {
+    if (!disclaimerAccepted) return;
+    const q = questions[currentIndex];
+    if (q && status === 'active') {
+      // Stop any existing recording first
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
+      setCurrentResponse('');
+      setRecordingTime(0);
+      // Small delay so TTS starts first
+      const t = setTimeout(() => startRecording(), 800);
+      return () => clearTimeout(t);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questions, currentIndex, disclaimerAccepted]);
 
   // Recording timer
   useEffect(() => {
@@ -220,29 +245,42 @@ export default function InterviewPage() {
     const nextIndex = currentIndex + 1;
     const totalCount = prepareData?.questionCount ?? 5;
 
-    if (nextIndex === 5 && totalCount > 5 && fetchedBatches === 1) {
-      setFetchedBatches(2);
-      fetchQuestions(prepareData!, true);
-    } else if (nextIndex === 10 && totalCount > 10 && fetchedBatches === 2) {
-      setFetchedBatches(3);
-      fetchQuestions(prepareData!, true);
-    }
-
     if (nextIndex < totalCount) {
       setCurrentIndex(nextIndex);
-      setIsTypingIndicatorVisible(false);
-      setMessages((prev) => [
-        ...prev,
-        { id: crypto.randomUUID(), role: 'ai', text: questions[nextIndex] ?? '...', timestamp: Date.now() },
-      ]);
+      setIsTypingIndicatorVisible(true);
+
+      // Build history for adaptive question generation
+      const history = questions.map((q, i) => ({ question: q, answer: updated[i] ?? '' }));
+
+      fetchNextQuestion(prepareData!, history, nextIndex + 1).then((result) => {
+        const q = result?.question ?? 'Can you tell me more about your experience?';
+        const mock = result?.isMock ?? true;
+        setQuestions((prev) => {
+          const arr = [...prev];
+          arr[nextIndex] = q;
+          return arr;
+        });
+        setIsMockQuestion((prev) => {
+          const arr = [...prev];
+          arr[nextIndex] = mock;
+          return arr;
+        });
+        setIsTypingIndicatorVisible(false);
+        setMessages((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), role: 'ai', text: q, timestamp: Date.now() },
+        ]);
+      });
     } else {
       setIsTypingIndicatorVisible(false);
-      setStatus('submitting');
       sessionStorage.setItem('interviewResults', JSON.stringify({
         domain: prepareData?.domain,
         difficulty: prepareData?.difficulty,
         questions,
         responses: updated,
+        isMockQuestion,
+        sessionId: sessionIdRef.current,
+        resumeId: (prepareData as any).resumeId,
         date: new Date().toISOString(),
       }));
       setTimeout(() => router.push('/results'), 1500);
@@ -272,12 +310,87 @@ export default function InterviewPage() {
       difficulty: prepareData?.difficulty,
       questions,
       responses: padded,
+      isMockQuestion,
+      sessionId: sessionIdRef.current,
+      resumeId: (prepareData as any).resumeId,
       date: new Date().toISOString(),
     }));
     router.push('/results');
   };
 
   if (!prepareData) return null;
+
+  if (showDisclaimer) return (
+    <div className="min-h-screen flex items-center justify-center p-6 relative overflow-hidden" style={{ backgroundColor: 'var(--color-background)' }}>
+      {/* Background purely for aesthetic depth */}
+      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full opacity-20 blur-[120px]" style={{ backgroundColor: 'var(--color-accent)' }} />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full opacity-20 blur-[120px]" style={{ backgroundColor: 'var(--color-secondary)' }} />
+      
+      <Navigation />
+      
+      <div 
+        className="w-full max-w-xl rounded-3xl p-10 bg-black/40 backdrop-blur-xl border relative z-10 shadow-[0_32px_80px_rgba(0,0,0,0.5)]"
+        style={{ borderColor: 'rgba(255,255,255,0.1)' }}
+      >
+        <div className="text-center mb-10">
+          <div className="inline-flex p-4 rounded-2xl bg-white/5 mb-6 border border-white/10">
+            <ShieldCheck className="w-10 h-10" style={{ color: 'var(--color-accent)' }} />
+          </div>
+          <h2 className="text-3xl font-black mb-3 italic tracking-tight" style={{ color: 'var(--color-text)' }}>SYSTEM INITIALIZATION</h2>
+          <p className="text-sm opacity-60 px-8" style={{ color: 'var(--color-text)' }}>
+            To provide an accurate technical and emotional evaluation, PrepHire requires active sensor calibration.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 mb-10">
+          {[
+            { 
+              Icon: Camera, 
+              title: 'Facial Analysis', 
+              desc: 'Syncs facial landmarks to detect stress and confidence levels. No recording is saved.',
+              color: 'var(--color-accent)' 
+            },
+            { 
+              Icon: Mic, 
+              title: 'Voice Recognition', 
+              desc: 'Converts your speech to text for real-time technical analysis. Data is processed locally.',
+              color: 'var(--color-secondary)' 
+            },
+          ].map(({ Icon, title, desc, color }) => (
+            <div 
+              key={title} 
+              className="group flex gap-5 p-5 rounded-2xl bg-white/5 border border-white/5 hover:border-white/20 transition-all duration-300"
+            >
+              <div className="flex-shrink-0 p-3 rounded-xl bg-black/20 group-hover:scale-110 transition-transform">
+                <Icon className="w-6 h-6" style={{ color }} />
+              </div>
+              <div>
+                <h4 className="font-bold text-sm mb-1 uppercase tracking-wider" style={{ color }}>{title}</h4>
+                <p className="text-xs opacity-60 leading-relaxed" style={{ color: 'var(--color-text)' }}>{desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <button
+            onClick={() => { setShowDisclaimer(false); setDisclaimerAccepted(true); }}
+            className="w-full py-4 rounded-xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 transition-all hover:brightness-110 active:scale-[0.98] shadow-lg"
+            style={{ backgroundColor: 'var(--color-accent)', color: '#000' }}
+          >
+            Begin Calibration <ChevronRight size={18} />
+          </button>
+          <button
+            onClick={() => router.push('/prepare')}
+            className="w-full py-3 rounded-xl font-bold text-xs uppercase tracking-widest opacity-40 hover:opacity-100 transition-all flex items-center justify-center gap-2"
+            style={{ color: 'var(--color-text)' }}
+          >
+            <ArrowLeft size={14} /> Reconfigure Session
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   if (loadingQuestions) return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
@@ -362,6 +475,9 @@ export default function InterviewPage() {
             difficulty={prepareData.difficulty}
             questionCount={prepareData.questionCount}
             sessionTimeLeft={sessionTimeLeft}
+            sessionId={sessionIdRef.current}
+            currentQuestionIndex={currentIndex}
+            isInterviewActive={status === 'active'}
           />
         </div>
 

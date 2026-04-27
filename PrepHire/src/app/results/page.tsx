@@ -1,64 +1,91 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AlertCircle, CheckCircle, TrendingUp, Download } from 'lucide-react';
+import { AlertCircle, CheckCircle, TrendingUp, Download, Loader2 } from 'lucide-react';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip as ChartTooltip,
+  Legend as ChartLegend,
+  Filler,
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
 import Navigation from '@/components/Navigation';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  ChartTooltip,
+  ChartLegend,
+  Filler
+);
 
 interface InterviewResults {
   domain: string;
   difficulty: string;
   questions: string[];
   responses: string[];
+  sessionId?: string;
   date: string;
 }
 
-interface QuestionFeedback {
-  question: string;
-  response: string;
-  score: number;
-  sentiment: 'positive' | 'neutral' | 'needs_improvement';
-  keywords: string[];
-  fillerWords: number;
-  suggestions: string[];
+interface EmotionAnalysis {
+  perQuestion: {
+    questionIndex: number;
+    avgFear: number;
+    maxFear: number;
+    fearIncrease: number;
+    avgVariation: number;
+    confidenceScore: number;
+  }[];
+  session: {
+    emotionalStability: string;
+    confidenceLevel: string;
+    stressPattern: string;
+    dominantEmotion: string;
+    interpretation: string;
+    suggestions?: string[];
+  };
+  timeline?: {
+    timestamp: string;
+    fear: number;
+    happy: number;
+    neutral: number;
+    surprise: number;
+    anger: number;
+    disgust: number;
+    sadness: number;
+  }[];
 }
 
-const FILLER_WORDS = ['um', 'uh', 'like', 'you know', 'basically', 'literally', 'actually', 'so', 'right'];
+interface QuestionEval {
+  score: number;
+  strength: string;
+  weakness: string;
+  suggestion: string;
+}
 
-function analyzeResponse(question: string, response: string, domain: string): QuestionFeedback {
-  if (!response.trim()) {
-    return { question, response: '(skipped)', score: 0, sentiment: 'needs_improvement', keywords: [], fillerWords: 0, suggestions: ['This question was skipped. Try to answer every question in your next session.'] };
-  }
-  const words = response.toLowerCase().split(/\s+/);
-  const wordCount = words.length;
-  const fillerCount = FILLER_WORDS.reduce((count, filler) => count + (response.match(new RegExp(`\\b${filler}\\b`, 'gi'))?.length || 0), 0);
-  const domainKeywords: Record<string, string[]> = {
-    'Frontend Development': ['component', 'react', 'css', 'javascript', 'dom', 'responsive', 'performance', 'accessibility', 'state', 'hook'],
-    'Backend Development': ['api', 'database', 'server', 'authentication', 'cache', 'scalable', 'endpoint', 'query', 'security', 'microservice'],
-    'Full Stack Development': ['frontend', 'backend', 'database', 'api', 'deploy', 'architecture', 'state', 'server', 'client', 'integration'],
-    'Data Science': ['model', 'data', 'algorithm', 'training', 'accuracy', 'feature', 'classification', 'regression', 'overfitting', 'validation'],
-    'DevOps/Cloud': ['pipeline', 'deploy', 'container', 'kubernetes', 'monitoring', 'ci/cd', 'infrastructure', 'automation', 'scaling', 'cloud'],
-    'Product Management': ['user', 'metric', 'roadmap', 'stakeholder', 'priority', 'feedback', 'sprint', 'kpi', 'launch', 'strategy'],
-    'UI/UX Design': ['user', 'research', 'prototype', 'wireframe', 'usability', 'accessibility', 'iteration', 'feedback', 'flow', 'design'],
-    'QA/Testing': ['test', 'automation', 'coverage', 'regression', 'bug', 'integration', 'unit', 'end-to-end', 'ci', 'quality'],
-  };
-  const detectedKeywords = (domainKeywords[domain] || []).filter((kw) => response.toLowerCase().includes(kw));
-  let score = 50;
-  score += Math.min(detectedKeywords.length * 5, 25);
-  score += wordCount >= 50 ? 10 : wordCount >= 20 ? 5 : 0;
-  score -= Math.min(fillerCount * 3, 15);
-  score += response.toLowerCase().includes('example') || response.toLowerCase().includes('for instance') ? 5 : 0;
-  score += response.toLowerCase().includes('result') || response.toLowerCase().includes('outcome') ? 5 : 0;
-  score = Math.max(0, Math.min(100, Math.round(score)));
-  const sentiment: QuestionFeedback['sentiment'] = score >= 75 ? 'positive' : score >= 50 ? 'neutral' : 'needs_improvement';
-  const suggestions: string[] = [];
-  if (wordCount < 30) suggestions.push('Your answer was quite short. Aim for at least 3-4 sentences with specific details.');
-  if (fillerCount > 3) suggestions.push(`You used ${fillerCount} filler words. Practice pausing instead of saying "um" or "uh".`);
-  if (detectedKeywords.length < 2) suggestions.push('Try to incorporate more domain-specific terminology in your answers.');
-  if (!response.toLowerCase().includes('example') && !response.toLowerCase().includes('for instance')) suggestions.push('Back up your points with a concrete example from your experience.');
-  if (score >= 75) suggestions.push('Strong answer! Keep using specific examples and measurable outcomes.');
-  return { question, response, score, sentiment, keywords: detectedKeywords, fillerWords: fillerCount, suggestions };
+interface OverallEval {
+  score: number;
+  strengths: string[];
+  improvements: string[];
+  recommendation: 'Strong Yes' | 'Yes' | 'Maybe' | 'No';
+  summary: string;
+}
+
+interface Evaluation {
+  perQuestion: QuestionEval[];
+  overall: OverallEval;
 }
 
 function saveToHistory(results: InterviewResults, overallScore: number) {
@@ -75,44 +102,223 @@ function saveToHistory(results: InterviewResults, overallScore: number) {
   sessionStorage.setItem('sessionHistory', JSON.stringify(history.slice(0, 20)));
 }
 
+const recommendationColor = (r: string) => {
+  if (r === 'Strong Yes') return 'var(--color-accent)';
+  if (r === 'Yes') return 'var(--color-accent)';
+  if (r === 'Maybe') return 'var(--color-secondary)';
+  return 'var(--color-text)';
+};
+
 export default function ResultsPage() {
   const router = useRouter();
-  const [feedback, setFeedback] = useState<QuestionFeedback[]>([]);
-  const [domain, setDomain] = useState('');
-  const [difficulty, setDifficulty] = useState('');
+  const [results, setResults] = useState<InterviewResults | null>(null);
+  const [evaluation, setEvaluation] = useState<Evaluation | null>(null);
+  const [emotionData, setEmotionData] = useState<EmotionAnalysis | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // useMemo must be called before any early returns (Rules of Hooks)
+  const chartData = useMemo(() => {
+    if (!emotionData?.timeline || emotionData.timeline.length === 0) return null;
+
+    const sorted = [...emotionData.timeline].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+    const startTime = new Date(sorted[0].timestamp).getTime();
+
+    const labels = sorted.map((point) => {
+      const elapsedSeconds = Math.floor(
+        (new Date(point.timestamp).getTime() - startTime) / 1000
+      );
+      const minutes = Math.floor(elapsedSeconds / 60);
+      const seconds = elapsedSeconds % 60;
+      return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    });
+
+    return {
+      labels,
+      datasets: [
+        {
+          label: 'Fear',
+          data: sorted.map(p => Math.round(p.fear)),
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+        },
+        {
+          label: 'Happy',
+          data: sorted.map(p => Math.round(p.happy)),
+          borderColor: '#22c55e',
+          backgroundColor: 'rgba(34, 197, 94, 0.1)',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+        },
+        {
+          label: 'Neutral',
+          data: sorted.map(p => Math.round(p.neutral)),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.1)',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+        },
+        {
+          label: 'Sadness',
+          data: sorted.map(p => Math.round(p.sadness)),
+          borderColor: '#a855f7',
+          backgroundColor: 'rgba(168, 85, 247, 0.1)',
+          borderWidth: 2,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+          fill: true,
+        },
+      ],
+    };
+  }, [emotionData]);
+
+  const emotionalInsights = useMemo(() => {
+    if (!emotionData?.timeline || emotionData.timeline.length === 0) return [];
+    
+    const insights = [];
+    const timeline = emotionData.timeline;
+    
+    // Calculate averages
+    const avgAnger = timeline.reduce((acc, p) => acc + p.anger, 0) / timeline.length;
+    const avgSurprise = timeline.reduce((acc, p) => acc + p.surprise, 0) / timeline.length;
+    const surpriseSpikes = timeline.filter(p => p.surprise > 45).length;
+    
+    if (avgAnger > 25) {
+      insights.push("You appeared tense or slightly frustrated at points. Try to relax your facial muscles when thinking.");
+    }
+    
+    if (surpriseSpikes > 3) {
+      insights.push("You seemed frequently caught off guard by questions. Consider practicing more common behavioral prompts.");
+    }
+    
+    const lateSessionEnergy = timeline.slice(-5).reduce((acc, p) => acc + p.sadness + p.neutral, 0) / 5;
+    if (lateSessionEnergy > 80) {
+      insights.push("Your energy levels seemed to dip towards the end. Maintain high engagement until the final question.");
+    }
+
+    if (timeline.filter(p => p.happy > 40).length > timeline.length * 0.3) {
+      insights.push("Great use of positive facial expressions! This builds rapport and shows confidence.");
+    }
+
+    return insights;
+  }, [emotionData]);
+
+  const derivedMetrics = useMemo(() => {
+    if (!emotionData?.timeline || emotionData.timeline.length === 0) return null;
+    const t = emotionData.timeline;
+    const avgCount = t.length;
+    
+    const avgHappy = t.reduce((acc, p) => acc + p.happy, 0) / avgCount;
+    const avgNeutral = t.reduce((acc, p) => acc + p.neutral, 0) / avgCount;
+    const avgFear = t.reduce((acc, p) => acc + p.fear, 0) / avgCount;
+    const avgSad = t.reduce((acc, p) => acc + p.sadness, 0) / avgCount;
+
+    return {
+      confidenceIndex: Math.min(100, Math.round(avgHappy + (avgNeutral * 0.6))),
+      stressIndex: Math.min(100, Math.round(avgFear + (avgSad * 0.5))),
+    };
+  }, [emotionData]);
 
   useEffect(() => {
     const raw = sessionStorage.getItem('interviewResults');
     if (!raw) { router.push('/prepare'); return; }
-    const results: InterviewResults = JSON.parse(raw);
-    setDomain(results.domain);
-    setDifficulty(results.difficulty);
-    const analyzed = results.questions.map((q, i) => analyzeResponse(q, results.responses[i] || '', results.domain));
-    setFeedback(analyzed);
-    const overall = Math.round(analyzed.reduce((s, f) => s + f.score, 0) / analyzed.length);
-    saveToHistory(results, overall);
+    const data: InterviewResults = JSON.parse(raw);
+    setResults(data);
+
+    const pairs = data.questions.map((q, i) => ({
+      question: q,
+      answer: data.responses[i] || '',
+      isMock: (data as any).isMockQuestion?.[i] ?? false,
+    }));
+
+    fetch('/api/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        domain: data.domain,
+        difficulty: data.difficulty,
+        interviewType: 'audio',
+        pairs,
+        resumeId: (data as any).resumeId
+      }),
+    })
+      .then((r) => r.json())
+      .then((ev) => {
+        if (ev.error) throw new Error(ev.error);
+        setEvaluation(ev);
+        saveToHistory(data, ev.overall?.score ?? 0);
+      })
+      .catch(() => setError('Could not load AI evaluation. Please try again.'))
+      .finally(() => setLoading(false));
+
+    if (data.sessionId) {
+      fetch(`/api/emotion/analyze?sessionId=${data.sessionId}`)
+        .then((r) => r.json())
+        .then((ed) => {
+          if (!ed.error && ed.session) {
+            setEmotionData(ed);
+          }
+        })
+        .catch(() => {});
+    }
   }, [router]);
 
-  if (feedback.length === 0) return null;
+  if (!results) return null;
 
-  const overallScore = Math.round(feedback.reduce((s, f) => s + f.score, 0) / feedback.length);
-  const avgFillerWords = Math.round(feedback.reduce((s, f) => s + f.fillerWords, 0) / feedback.length);
-  const answeredCount = feedback.filter((f) => f.response !== '(skipped)').length;
+  if (loading) return (
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
+      <Navigation />
+      <div className="flex flex-col items-center justify-center py-40 gap-6">
+        <Loader2 className="w-12 h-12 animate-spin" style={{ color: 'var(--color-accent)' }} />
+        <div className="text-center">
+          <h2 className="text-2xl font-bold mb-2" style={{ color: 'var(--color-secondary)' }}>Analyzing your interview...</h2>
+          <p style={{ color: 'var(--color-text)' }}>Our AI interviewer is reviewing your answers</p>
+        </div>
+      </div>
+    </div>
+  );
 
-  const sentimentColor = (s: QuestionFeedback['sentiment']) =>
-    s === 'positive' ? 'var(--color-accent)' : s === 'neutral' ? 'var(--color-secondary)' : 'var(--color-text)';
+  if (error || !evaluation) return (
+    <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
+      <Navigation />
+      <div className="flex flex-col items-center justify-center py-40 gap-4">
+        <p style={{ color: 'var(--color-accent)' }}>{error || 'Something went wrong.'}</p>
+        <button onClick={() => router.push('/prepare')} className="px-6 py-2 rounded-lg font-semibold" style={{ backgroundColor: 'var(--color-accent)', color: 'var(--color-background)' }}>
+          Try Again
+        </button>
+      </div>
+    </div>
+  );
+
+  const { perQuestion, overall } = evaluation;
+  const answeredCount = results.responses.filter(Boolean).length;
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
       <Navigation />
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
 
+        {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>Interview Session Results</h1>
+          <h1 className="text-4xl font-bold mb-2" style={{ color: 'var(--color-text)' }}>Interview Results</h1>
           <div className="flex items-center gap-3">
-            <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: 'var(--color-card)', color: 'var(--color-secondary)' }}>{domain}</span>
+            <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: 'var(--color-card)', color: 'var(--color-secondary)' }}>{results.domain}</span>
             <span className="text-sm font-semibold px-3 py-1 rounded-full" style={{ backgroundColor: 'var(--color-card)', color: 'var(--color-accent)' }}>
-              {difficulty.charAt(0).toUpperCase() + difficulty.slice(1)}
+              {results.difficulty.charAt(0).toUpperCase() + results.difficulty.slice(1)}
             </span>
           </div>
         </div>
@@ -120,106 +326,226 @@ export default function ResultsPage() {
         {/* Score Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
           {[
-            { label: 'Overall Score', value: overallScore, sub: null, icon: overallScore >= 75 ? CheckCircle : AlertCircle },
-            { label: 'Answered', value: `${answeredCount}/${feedback.length}`, sub: 'Questions', icon: null },
-            { label: 'Avg Filler Words', value: avgFillerWords, sub: 'Per response', icon: null },
-            { label: 'Strong Answers', value: feedback.filter((f) => f.sentiment === 'positive').length, sub: 'Scored 75+', icon: null },
-          ].map(({ label, value, sub, icon: Icon }) => (
+            { label: 'Overall Score', value: `${overall.score}%`, icon: overall.score >= 75 ? CheckCircle : AlertCircle },
+            { label: 'Answered', value: `${answeredCount}/${results.questions.length}`, sub: 'Questions' },
+            { label: 'Strong Answers', value: perQuestion.filter(q => q.score >= 75).length, sub: 'Scored 75+' },
+            { label: 'Recommendation', value: overall.recommendation, color: recommendationColor(overall.recommendation) },
+          ].map(({ label, value, sub, icon: Icon, color }) => (
             <div key={label} className="rounded-xl p-6 text-center" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
-              <div className="text-5xl font-bold mb-2" style={{ color: 'var(--color-accent)' }}>{value}</div>
+              <div className="text-3xl font-bold mb-2" style={{ color: color ?? 'var(--color-accent)' }}>{value}</div>
               <p className="font-semibold" style={{ color: 'var(--color-secondary)' }}>{label}</p>
-              {sub && <p className="text-sm mt-2" style={{ color: 'var(--color-text)' }}>{sub}</p>}
-              {Icon && <div className="mt-3 flex justify-center"><Icon className="w-7 h-7" style={{ color: 'var(--color-accent)' }} /></div>}
+              {sub && <p className="text-sm mt-1" style={{ color: 'var(--color-text)' }}>{sub}</p>}
+              {Icon && <div className="mt-2 flex justify-center"><Icon className="w-6 h-6" style={{ color: color ?? 'var(--color-accent)' }} /></div>}
             </div>
           ))}
         </div>
 
-        {/* Question Breakdown */}
+        {/* Interviewer Summary — moved to bottom, shown after per-question breakdown */}
+
+        {/* Per Question Breakdown */}
         <div className="mb-12">
           <h2 className="text-3xl font-bold mb-6" style={{ color: 'var(--color-text)' }}>Question Breakdown</h2>
           <div className="space-y-6">
-            {feedback.map((item, idx) => (
-              <div key={idx} className="rounded-xl p-8 border-l-4" style={{ backgroundColor: 'var(--color-card)', borderColor: sentimentColor(item.sentiment) }}>
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold mb-1" style={{ color: 'var(--color-secondary)' }}>Question {idx + 1}</h3>
-                    <p style={{ color: 'var(--color-text)' }}>{item.question}</p>
-                  </div>
-                  <span className="text-2xl font-bold ml-4" style={{ color: sentimentColor(item.sentiment) }}>{item.score}%</span>
-                </div>
+            {results.questions.map((question, idx) => {
+              const qEval = perQuestion[idx];
+              const answer = results.responses[idx];
+              const scoreColor = qEval?.score >= 75 ? 'var(--color-accent)' : qEval?.score >= 50 ? 'var(--color-secondary)' : 'var(--color-text)';
 
-                {item.response !== '(skipped)' && (
-                  <div className="rounded-lg p-4 mb-4 text-sm italic" style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-text)' }}>
-                    &ldquo;{item.response.length > 200 ? item.response.slice(0, 200) + '...' : item.response}&rdquo;
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-4">
-                  <div className="p-3 rounded-lg" style={{ backgroundColor: 'var(--color-background)' }}>
-                    <div className="text-xs mb-1" style={{ color: 'var(--color-text)' }}>Filler Words</div>
-                    <div className="text-xl font-bold" style={{ color: 'var(--color-accent)' }}>{item.fillerWords}</div>
-                  </div>
-                  <div className="p-3 rounded-lg col-span-2" style={{ backgroundColor: 'var(--color-background)' }}>
-                    <div className="text-xs mb-2" style={{ color: 'var(--color-text)' }}>Keywords Detected</div>
-                    <div className="flex gap-2 flex-wrap">
-                      {item.keywords.length > 0 ? item.keywords.map((kw) => (
-                        <span key={kw} className="text-xs font-semibold px-2 py-1 rounded" style={{ backgroundColor: 'var(--color-secondary)', color: 'var(--color-background)' }}>{kw}</span>
-                      )) : <span className="text-xs" style={{ color: 'var(--color-text)' }}>No domain keywords detected</span>}
+              return (
+                <div key={idx} className="rounded-xl p-8 border-l-4" style={{ backgroundColor: 'var(--color-card)', borderColor: scoreColor }}>
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-bold mb-1" style={{ color: 'var(--color-secondary)' }}>Question {idx + 1}</h3>
+                      <p style={{ color: 'var(--color-text)' }}>{question}</p>
                     </div>
+                    {qEval && (
+                      <span className="text-2xl font-bold ml-4" style={{ color: scoreColor }}>{qEval.score}%</span>
+                    )}
                   </div>
-                </div>
 
-                <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--color-background)', border: '1px solid var(--color-secondary)' }}>
-                  <h4 className="font-bold mb-2" style={{ color: 'var(--color-secondary)' }}>Feedback</h4>
-                  <ul className="space-y-1">
-                    {item.suggestions.map((s, i) => (
+                  {answer ? (
+                    <div className="rounded-lg p-4 mb-4 text-sm italic" style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-text)' }}>
+                      &ldquo;{answer.length > 250 ? answer.slice(0, 250) + '...' : answer}&rdquo;
+                    </div>
+                  ) : (
+                    <div className="rounded-lg p-3 mb-4 text-sm" style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-text)', opacity: 0.6 }}>
+                      (skipped)
+                    </div>
+                  )}
+
+                  {qEval && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--color-background)', borderLeft: '3px solid var(--color-accent)' }}>
+                        <div className="text-xs font-bold mb-1" style={{ color: 'var(--color-accent)' }}>WHAT WORKED</div>
+                        <p className="text-sm" style={{ color: 'var(--color-text)' }}>{qEval.strength}</p>
+                      </div>
+                      <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--color-background)', borderLeft: '3px solid var(--color-secondary)' }}>
+                        <div className="text-xs font-bold mb-1" style={{ color: 'var(--color-secondary)' }}>WHAT WAS MISSING</div>
+                        <p className="text-sm" style={{ color: 'var(--color-text)' }}>{qEval.weakness}</p>
+                      </div>
+                      <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--color-background)', borderLeft: '3px solid var(--color-text)' }}>
+                        <div className="text-xs font-bold mb-1" style={{ color: 'var(--color-text)' }}>SUGGESTION</div>
+                        <p className="text-sm" style={{ color: 'var(--color-text)' }}>{qEval.suggestion}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Emotional Analysis Section */}
+        {emotionData && emotionData.perQuestion.length > 0 && (
+          <div className="mb-12">
+            <h2 className="text-3xl font-bold mb-6" style={{ color: 'var(--color-text)' }}>Emotional Intelligence Report</h2>
+            <div className="rounded-xl p-8 mb-8" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-8">
+                <div>
+                  <div className="text-xs font-bold mb-1 opacity-60">CONFIDENCE INDEX</div>
+                  <div className="text-2xl font-bold" style={{ color: 'var(--color-accent)' }}>{derivedMetrics?.confidenceIndex}%</div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold mb-1 opacity-60">STRESS INDEX</div>
+                  <div className="text-2xl font-bold" style={{ color: '#ef4444' }}>{derivedMetrics?.stressIndex}%</div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold mb-1 opacity-60">DOMINANT STATE</div>
+                  <div className="text-2xl font-bold capitalize" style={{ color: 'var(--color-secondary)' }}>{emotionData.session.dominantEmotion}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-bold mb-1 opacity-60">STABILITY</div>
+                  <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>{emotionData.session.emotionalStability}</div>
+                </div>
+              </div>
+
+              {/* Smart Insights & Suggestions */}
+              {(emotionalInsights.length > 0 || (emotionData.session.suggestions && emotionData.session.suggestions.length > 0)) && (
+                <div className="mb-8 p-6 rounded-xl border-2 border-dashed" style={{ backgroundColor: 'var(--color-background)', borderColor: 'var(--color-secondary)' }}>
+                  <h3 className="text-sm font-bold mb-3 uppercase tracking-wider" style={{ color: 'var(--color-secondary)' }}>Behavioral Feedback & Coaching</h3>
+                  <ul className="space-y-4">
+                    {/* Library-based Suggestions */}
+                    {emotionData.session.suggestions?.map((suggestion, idx) => (
+                      <li key={`sug-${idx}`} className="flex items-start gap-3 text-sm" style={{ color: 'var(--color-text)' }}>
+                        <span className="mt-1" title="Coaching Tip">🎯</span> 
+                        <div>
+                          <span className="font-bold block mb-1">Coaching Tip:</span>
+                          {suggestion}
+                        </div>
+                      </li>
+                    ))}
+                    
+                    {/* Custom Logic-based Insights */}
+                    {emotionalInsights.map((insight, idx) => (
+                      <li key={`ins-${idx}`} className="flex items-start gap-3 text-sm" style={{ color: 'var(--color-text)' }}>
+                        <span className="mt-1" title="AI Insight">💡</span> 
+                        <div>
+                          <span className="font-bold block mb-1">Behavioral Insight:</span>
+                          {insight}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="p-4 rounded-lg italic" style={{ backgroundColor: 'var(--color-background)', color: 'var(--color-text)', borderLeft: '4px solid var(--color-accent)' }}>
+                &ldquo;{emotionData.session.interpretation}&rdquo;
+              </div>
+
+              {chartData && (
+                <div className="w-full mt-8" style={{ height: '300px' }}>
+                  <h3 className="text-sm font-bold mb-4 opacity-70" style={{ color: 'var(--color-text)' }}>EMOTIONAL TIMELINE</h3>
+                  <Line 
+                    data={chartData}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          position: 'bottom' as const,
+                          labels: {
+                            color: 'rgba(255, 255, 255, 0.6)',
+                            usePointStyle: true,
+                            pointStyle: 'circle',
+                            font: { size: 12 }
+                          }
+                        },
+                        tooltip: {
+                          mode: 'index' as const,
+                          intersect: false,
+                          backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                          titleColor: '#fff',
+                          bodyColor: '#fff',
+                          borderColor: 'rgba(255, 255, 255, 0.1)',
+                          borderWidth: 1,
+                          padding: 10,
+                          cornerRadius: 8,
+                        },
+                      },
+                      scales: {
+                        x: {
+                          grid: { display: false },
+                          ticks: { color: 'rgba(255, 255, 255, 0.4)', font: { size: 10 } },
+                        },
+                        y: {
+                          min: 0,
+                          max: 100,
+                          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+                          ticks: { 
+                            color: 'rgba(255, 255, 255, 0.4)', 
+                            font: { size: 10 },
+                            callback: (value) => `${value}%`
+                          },
+                        },
+                      },
+                      interaction: {
+                        mode: 'nearest' as const,
+                        axis: 'x' as const,
+                        intersect: false,
+                      },
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Overall Assessment — shown after all per-question evaluations */}
+        <div className="rounded-xl p-8 mb-12" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-secondary)' }}>
+          <div className="flex items-start gap-4">
+            <TrendingUp className="w-8 h-8 flex-shrink-0 mt-1" style={{ color: 'var(--color-accent)' }} />
+            <div className="flex-1">
+              <h3 className="text-2xl font-bold mb-3" style={{ color: 'var(--color-secondary)' }}>Overall Assessment</h3>
+              <p className="mb-6 leading-relaxed" style={{ color: 'var(--color-text)' }}>{overall.summary}</p>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <h4 className="font-bold mb-3 flex items-center gap-2" style={{ color: 'var(--color-accent)' }}>
+                    <CheckCircle className="w-4 h-4" /> Strengths
+                  </h4>
+                  <ul className="space-y-2">
+                    {overall.strengths.map((s, i) => (
                       <li key={i} className="text-sm flex items-start gap-2" style={{ color: 'var(--color-text)' }}>
                         <span style={{ color: 'var(--color-accent)' }}>•</span>{s}
                       </li>
                     ))}
                   </ul>
                 </div>
+                <div>
+                  <h4 className="font-bold mb-3 flex items-center gap-2" style={{ color: 'var(--color-secondary)' }}>
+                    <AlertCircle className="w-4 h-4" /> Areas to Improve
+                  </h4>
+                  <ul className="space-y-2">
+                    {overall.improvements.map((s, i) => (
+                      <li key={i} className="text-sm flex items-start gap-2" style={{ color: 'var(--color-text)' }}>
+                        <span style={{ color: 'var(--color-secondary)' }}>•</span>{s}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Overall Recommendations */}
-        <div className="rounded-xl p-8 mb-12" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-secondary)' }}>
-          <div className="flex items-start gap-4">
-            <TrendingUp className="w-8 h-8 flex-shrink-0 mt-1" style={{ color: 'var(--color-accent)' }} />
-            <div>
-              <h3 className="text-2xl font-bold mb-4" style={{ color: 'var(--color-secondary)' }}>Overall Recommendations</h3>
-              <ul className="space-y-3">
-                {overallScore >= 75 && (
-                  <li className="flex items-start gap-3">
-                    <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-accent)' }} />
-                    <span style={{ color: 'var(--color-text)' }}>Strong performance overall — keep using specific examples and measurable outcomes.</span>
-                  </li>
-                )}
-                {avgFillerWords > 3 && (
-                  <li className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-secondary)' }} />
-                    <span style={{ color: 'var(--color-text)' }}>Work on reducing filler words — practice pausing silently instead of saying &ldquo;um&rdquo; or &ldquo;uh&rdquo;.</span>
-                  </li>
-                )}
-                {answeredCount < feedback.length && (
-                  <li className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-secondary)' }} />
-                    <span style={{ color: 'var(--color-text)' }}>You skipped {feedback.length - answeredCount} question(s). Try to answer every question in your next session.</span>
-                  </li>
-                )}
-                {feedback.some((f) => f.keywords.length < 2) && (
-                  <li className="flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-secondary)' }} />
-                    <span style={{ color: 'var(--color-text)' }}>Use more {domain}-specific terminology to demonstrate domain expertise.</span>
-                  </li>
-                )}
-                <li className="flex items-start gap-3">
-                  <CheckCircle className="w-5 h-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--color-accent)' }} />
-                  <span style={{ color: 'var(--color-text)' }}>Keep practicing regularly — consistency is the key to interview confidence.</span>
-                </li>
-              </ul>
             </div>
           </div>
         </div>
@@ -228,8 +554,11 @@ export default function ResultsPage() {
         <div className="flex gap-4 justify-center flex-wrap">
           <button
             onClick={() => {
-              const text = feedback.map((f, i) => `Q${i+1}: ${f.question}\nScore: ${f.score}%\nFeedback: ${f.suggestions.join(' ')}`).join('\n\n');
-              const blob = new Blob([`PrepHire Interview Results\nDomain: ${domain}\n\n${text}`], { type: 'text/plain' });
+              const text = results.questions.map((q, i) => {
+                const ev = perQuestion[i];
+                return `Q${i+1}: ${q}\nAnswer: ${results.responses[i] || '(skipped)'}\nScore: ${ev?.score ?? 0}%\nStrength: ${ev?.strength ?? ''}\nWeakness: ${ev?.weakness ?? ''}\nSuggestion: ${ev?.suggestion ?? ''}`;
+              }).join('\n\n');
+              const blob = new Blob([`PrepHire Interview Results\nDomain: ${results.domain}\nOverall: ${overall.score}%\nRecommendation: ${overall.recommendation}\n\nSummary: ${overall.summary}\n\n${text}`], { type: 'text/plain' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a'); a.href = url; a.download = 'interview-results.txt'; a.click();
             }}

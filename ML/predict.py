@@ -4,6 +4,8 @@ import re
 import joblib
 import PyPDF2
 import io
+import os
+import numpy as np
 
 def clean_resume(text):
     text = re.sub(r'http\S+\s*', ' ', text)
@@ -25,18 +27,26 @@ def main():
 
     cleaned = clean_resume(raw_text)
 
-    # Load models (paths relative to this script's location)
-    import os
+    # Load models from ML directory (where this script lives)
     base = os.path.dirname(os.path.abspath(__file__))
-    classifier = joblib.load(os.path.join(base, "../PrepHire/resume_classifier_model.pkl"))
-    vectorizer = joblib.load(os.path.join(base, "../PrepHire/tfidf_vectorizer.pkl"))
-    encoder    = joblib.load(os.path.join(base, "../PrepHire/label_encoder.pkl"))
+    classifier = joblib.load(os.path.join(base, "resume_classifier_model.pkl"))
+    vectorizer = joblib.load(os.path.join(base, "tfidf_vectorizer.pkl"))
+    encoder    = joblib.load(os.path.join(base, "label_encoder.pkl"))
 
     vec = vectorizer.transform([cleaned])
     pred = classifier.predict(vec)
     domain = encoder.inverse_transform(pred)[0]
 
-    print(json.dumps({"domain": domain}))
+    # Also return confidence
+    probs = classifier.predict_proba(vec)
+    confidence = float(np.max(probs) * 100)
+
+    # Return domain + first 3000 chars of raw text for context
+    print(json.dumps({
+        "domain": domain,
+        "confidence": round(confidence, 1),
+        "resumeText": raw_text[:3000].strip()
+    }))
 
 if __name__ == "__main__":
     main()

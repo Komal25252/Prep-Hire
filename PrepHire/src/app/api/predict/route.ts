@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { spawn } from 'child_process';
-import path from 'path';
+import { connectDB } from '@/lib/mongodb';
+import Resume from '@/models/Resume';
+import { chunkText, preGenerateQuestions } from '@/lib/gemini';
+import { auth } from '@/auth';
 
 export async function POST(req: NextRequest) {
+  const session = await auth();
   const formData = await req.formData();
   const file = formData.get('file') as File | null;
 
@@ -10,37 +13,50 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
   }
 
-  const buffer = Buffer.from(await file.arrayBuffer());
+  const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL || 'http://localhost:5000';
 
-  // Path to the venv python and the predict script
-  const pythonPath = path.join(process.cwd(), '../ML/venv/bin/python3');
-  const scriptPath = path.join(process.cwd(), '../ML/predict.py');
+  try {
+    const flaskForm = new FormData();
+    flaskForm.append('file', file);
 
-  return new Promise<NextResponse>((resolve) => {
-    const py = spawn(pythonPath, [scriptPath]);
-
-    let output = '';
-    let errorOutput = '';
-
-    py.stdout.on('data', (data) => { output += data.toString(); });
-    py.stderr.on('data', (data) => { errorOutput += data.toString(); });
-
-    py.on('close', (code) => {
-      if (code !== 0) {
-        console.error('Python error:', errorOutput);
-        resolve(NextResponse.json({ error: 'Prediction failed', details: errorOutput }, { status: 500 }));
-        return;
-      }
-      try {
-        const result = JSON.parse(output.trim());
-        resolve(NextResponse.json(result));
-      } catch {
-        resolve(NextResponse.json({ error: 'Invalid response from model' }, { status: 500 }));
-      }
+    const res = await fetch(`${flaskUrl}/predict`, {
+      method: 'POST',
+      body: flaskForm,
     });
 
-    // Send PDF bytes to the Python script via stdin
-    py.stdin.write(buffer);
-    py.stdin.end();
-  });
+    if (!res.ok) {
+      const err = await res.text();
+      return NextResponse.json({ error: `Flask error: ${err}` }, { status: 500 });
+    }
+
+    const data = await res.json();
+    const { domain, confidence, resumeText } = data;
+
+    // --- RAG-Lite Optimization ---
+    await connectDB();
+    
+    // Chunk for later evaluation retrieval
+    const chunks = chunkText(resumeText, 500);
+    
+    // Pre-generate 10 pool questions to save 10 API calls during session
+    const preQuestions = await preGenerateQuestions(domain, resumeText || "");
+
+    const newResume = await Resume.create({
+      userId: session?.user?.id || 'anonymous',
+      domain,
+      rawText: resumeText,
+      chunks,
+      preGeneratedQuestions: preQuestions,
+    });
+
+    return NextResponse.json({
+      ...data,
+      resumeId: newResume._id.toString()
+    });
+
+  } catch (err: any) {
+    console.error('Resume processing error:', err);
+    // Graceful degradation
+    return NextResponse.json({ error: 'AI server unavailable', domain: null }, { status: 503 });
+  }
 }
