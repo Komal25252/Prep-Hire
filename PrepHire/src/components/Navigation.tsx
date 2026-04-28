@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart3, Menu, LogOut, User } from "lucide-react";
+import { Sparkles, Menu, LogOut, User } from "lucide-react";
 import { useSession, signOut, signIn } from "next-auth/react";
 import { useState, useEffect } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -59,7 +59,7 @@ export default function Navigation() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <Link href="/" className="flex items-center gap-2">
-            <BarChart3 className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
+            <Sparkles className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
             <span className="text-2xl font-bold" style={{ color: 'var(--color-secondary)' }}>PrepHire</span>
           </Link>
 
@@ -152,7 +152,7 @@ export default function Navigation() {
             >✕</button>
             <div className="flex flex-col items-center mb-6">
               <div className="flex items-center gap-2 mb-4">
-                <BarChart3 className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
+                <Sparkles className="w-8 h-8" style={{ color: 'var(--color-accent)' }} />
                 <span className="text-2xl font-bold" style={{ color: 'var(--color-secondary)' }}>PrepHire</span>
               </div>
               <h1 className="text-2xl font-bold text-white mb-1">{isSignUp ? "Create an account" : "Welcome back"}</h1>

@@ -28,11 +28,13 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded-2xl p-8 min-h-96 flex items-center justify-center" style={{ backgroundColor: 'var(--color-card)', border: '1px solid var(--color-border)' }}>
-            <div className="text-center">
-              <Sparkles className="w-20 h-20 mx-auto mb-4" style={{ color: 'var(--color-accent)' }} />
-              <p className="text-lg" style={{ color: 'var(--color-secondary)' }}>Interactive Interview Simulation</p>
-            </div>
+          <div className="rounded-2xl overflow-hidden" style={{ border: '1px solid var(--color-border)' }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/homepgimg.png"
+              alt="Interview simulation illustration"
+              className="w-full h-full object-cover"
+            />
           </div>
         </div>
       </section>

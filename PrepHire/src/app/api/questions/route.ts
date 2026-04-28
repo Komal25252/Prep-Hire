@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
         // Use questionNumber (1-indexed) to pick from the pool
         const poolIndex = (questionNumber - 1) % resume.preGeneratedQuestions.length;
         const selected = resume.preGeneratedQuestions[poolIndex];
+        console.log('>>> Using pre-generated question from DB (Optimization Active)');
         return NextResponse.json({ 
           question: selected.question, 
           isMock: false,
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest) {
 
   // No API key — use MongoDB questions directly
   if (process.env.USE_MOCK_QUESTIONS === 'true' || !process.env.GEMINI_API_KEY) {
+    console.log('>>> Using Fallback question from DB (Manual Mock Mode)');
     const q = await getRandomMockQuestion(domain);
     return NextResponse.json({ question: q, isMock: true });
   }
@@ -104,6 +106,7 @@ A: ${lastExchange!.answer || '(no answer)'}
 Ask question ${questionNumber} as a follow-up. Pick one specific thing from their answer and probe deeper. If they skipped, ask a fresh relevant question based on their resume.
 Return ONLY the question, nothing else.`;
 
+    console.log(`>>> Using Gemini API for question generation (Q${questionNumber})`);
     const result = await model.generateContent(prompt);
     const question = result.response.text()
       .trim()
@@ -115,6 +118,7 @@ Return ONLY the question, nothing else.`;
     const status = String(err?.status ?? err?.message ?? '');
     if (status.includes('429') || status.includes('503') || status.includes('404')) {
       console.warn('Gemini unavailable, falling back to MongoDB question');
+      console.log('>>> Falling back to manual question from DB (Gemini Error)');
       const q = await getRandomMockQuestion(domain);
       return NextResponse.json({ question: q, isMock: true });
     }

@@ -15,6 +15,11 @@ const EmotionReadingSchema = new Schema(
       sadness: { type: Number, min: 0, max: 100 },
       surprise: { type: Number, min: 0, max: 100 },
     },
+    attention: { 
+      type: String, 
+      enum: ['focused', 'drift', 'absent'], 
+      default: 'focused' 
+    },
   },
   { timestamps: true }
 );

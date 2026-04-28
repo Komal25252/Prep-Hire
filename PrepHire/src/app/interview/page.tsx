@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { Camera, Mic, ShieldCheck, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Camera, Mic, ShieldCheck, ChevronRight, ArrowLeft, Volume2, VolumeX } from 'lucide-react';
 import Navigation from '@/components/Navigation';
 import WebcamPanel from '@/components/interview/WebcamPanel';
 import ChatPanel from '@/components/interview/ChatPanel';
@@ -42,44 +42,51 @@ export default function InterviewPage() {
   const [showDisclaimer, setShowDisclaimer] = useState(true);
   const [disclaimerAccepted, setDisclaimerAccepted] = useState(false);
 
-  const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionTimerRef = useRef<NodeJS.Timeout | null>(null);
   const sessionIdRef = useRef<string>(crypto.randomUUID());
 
-  // TTS helpers
-  const speakQuestion = (text: string) => {
+  const [isMuted, setIsMuted] = useState(false);
+
+  const speakQuestion = (text: string, onEnd?: () => void) => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
+    
+    if (isMuted) {
+      if (onEnd) onEnd();
+      return;
+    }
+
     setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = 0.9;
+      utterance.rate = 1.0;
       utterance.pitch = 1;
       utterance.volume = 1;
       utterance.lang = 'en-US';
+      
+      utterance.onend = () => { if (onEnd) onEnd(); };
+      utterance.onerror = () => { if (onEnd) onEnd(); };
+
       let voices = window.speechSynthesis.getVoices();
-      if (voices.length === 0) {
-        window.speechSynthesis.onvoiceschanged = () => {
-          voices = window.speechSynthesis.getVoices();
-          const preferred = voices.find((v) =>
-            v.lang.startsWith('en') &&
-            (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Female') || v.default)
-          );
-          if (preferred) utterance.voice = preferred;
-        };
-      } else {
+      const setVoiceAndSpeak = () => {
         const preferred = voices.find((v) =>
           v.lang.startsWith('en') &&
           (v.name.includes('Google') || v.name.includes('Samantha') || v.name.includes('Female') || v.default)
         );
         if (preferred) utterance.voice = preferred;
-      }
-      utterance.onerror = (e) => {
-        if (e.error !== 'interrupted' && e.error !== 'canceled') {
-          console.error('TTS error:', e.error);
-        }
+        window.speechSynthesis.speak(utterance);
       };
-      window.speechSynthesis.speak(utterance);
+
+      if (voices.length === 0) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          voices = window.speechSynthesis.getVoices();
+          setVoiceAndSpeak();
+        };
+      } else {
+        setVoiceAndSpeak();
+      }
     }, 100);
   };
 
@@ -89,7 +96,6 @@ export default function InterviewPage() {
     }
   };
 
-  // Fetch a single adaptive question based on conversation history
   const fetchNextQuestion = async (
     data: PrepareData,
     history: { question: string; answer: string }[],
@@ -110,29 +116,19 @@ export default function InterviewPage() {
         }),
       });
       const json = await res.json();
-      if (!json.question) return null;
       return { question: json.question, isMock: json.isMock ?? false };
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   };
 
-  // Initial load — fetch first question
+  // Initial load
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => { window.speechSynthesis.getVoices(); };
-    }
-
     const raw = sessionStorage.getItem('prepareData');
     if (!raw) { router.push('/prepare'); return; }
     const data: PrepareData = JSON.parse(raw);
     setPrepareData(data);
     setResponses(Array(data.questionCount ?? 5).fill(''));
 
-    let cancelled = false;
     fetchNextQuestion(data, [], 1).then((result) => {
-      if (cancelled) return;
       if (result) {
         setQuestions([result.question]);
         setIsMockQuestion([result.isMock]);
@@ -140,92 +136,146 @@ export default function InterviewPage() {
         const totalSeconds = (data.questionCount ?? 5) * 3 * 60;
         setSessionTimeLeft(totalSeconds);
         sessionTimerRef.current = setInterval(() => {
-          setSessionTimeLeft((t) => {
-            if (t <= 1) { clearInterval(sessionTimerRef.current!); return 0; }
-            return t - 1;
-          });
+          setSessionTimeLeft((t) => t > 0 ? t - 1 : 0);
         }, 1000);
       } else {
-        setLoadError('Failed to load questions. Please try again.');
+        setLoadError('Failed to load questions.');
       }
       setLoadingQuestions(false);
     });
 
-    return () => {
-      cancelled = true;
-      if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-    };
+    return () => { if (sessionTimerRef.current) clearInterval(sessionTimerRef.current); };
   }, [router]);
 
-  // Auto-submit when session timer hits 0
+  // Handle new question sequence: Speak -> Start Rec
   useEffect(() => {
-    if (sessionTimeLeft === 0 && !loadingQuestions && status === 'active' && questions.length > 0) {
-      advance(currentResponse);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionTimeLeft]);
-
-  // Auto-speak when a new question arrives (only after disclaimer accepted)
-  useEffect(() => {
-    if (!disclaimerAccepted) return;
-    const q = questions[currentIndex];
-    if (q) {
-      const t = setTimeout(() => speakQuestion(q), 300);
-      return () => clearTimeout(t);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, currentIndex, disclaimerAccepted]);
-
-  // Auto-start mic when a new question appears (only after disclaimer accepted)
-  useEffect(() => {
-    if (!disclaimerAccepted) return;
+    if (!disclaimerAccepted || loadingQuestions) return;
     const q = questions[currentIndex];
     if (q && status === 'active') {
-      // Stop any existing recording first
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-        recognitionRef.current = null;
-      }
-      setCurrentResponse('');
-      setRecordingTime(0);
-      // Small delay so TTS starts first
-      const t = setTimeout(() => startRecording(), 800);
-      return () => clearTimeout(t);
+      const waitTime = currentIndex === 0 ? 1000 : 500;
+      setTimeout(() => {
+        speakQuestion(q, () => {
+          if (status === 'active') startRecording();
+        });
+      }, waitTime);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [questions, currentIndex, disclaimerAccepted]);
+  }, [currentIndex, questions, disclaimerAccepted, loadingQuestions]);
 
-  // Recording timer
-  useEffect(() => {
-    if (isRecording) {
-      timerRef.current = setInterval(() => setRecordingTime((t) => t + 1), 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isRecording]);
+  const recognitionRef = useRef<any>(null);
 
-  const startRecording = () => {
-    setRecordingTime(0);
-    setIsRecording(true);
-    const SpeechRecognitionAPI = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognitionAPI) {
-      const recognition = new SpeechRecognitionAPI();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = (e: any) => {
-        const transcript = Array.from(e.results as any[]).map((r: any) => r[0].transcript).join(' ');
-        setCurrentResponse(transcript);
+  const startRecording = async () => {
+    try {
+      // CLEANUP: Ensure any previous recorder is stopped first
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      }
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+
+      console.log(">>> Requesting Microphone Access...");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log(">>> Mic Access Granted. Initializing MediaRecorder...");
+      
+      // 1. MediaRecorder for high-quality Whisper transcription
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          console.log(">>> Audio Chunk Received:", e.data.size, "bytes");
+          audioChunksRef.current.push(e.data);
+        }
       };
-      recognition.start();
-      recognitionRef.current = recognition;
+
+      mediaRecorder.onstop = async () => {
+        console.log(">>> MediaRecorder stopped. Processing", audioChunksRef.current.length, "chunks...");
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        console.log(">>> Audio Recording Size =", audioBlob.size, "bytes");
+        
+        if (audioBlob.size < 500) {
+          console.warn(">>> Audio blob too small. No sound likely captured.");
+          setIsTypingIndicatorVisible(false);
+          return;
+        }
+
+        setIsTypingIndicatorVisible(true);
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'audio.webm');
+
+        try {
+          console.log(">>> Submitting to Local Whisper for background accuracy...");
+          const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
+          const data = await res.json();
+          console.log(">>> Whisper Background Result:", data.text);
+          
+          // Only use Whisper if the browser engine failed to get ANYTHING
+          if (data.text && (!currentResponse || currentResponse.trim() === '')) {
+            console.log(">>> Browser engine was empty, using Whisper as fallback.");
+            setCurrentResponse(data.text);
+          } else {
+            console.log(">>> Browser already has text. Preserving raw input per user request.");
+          }
+        } catch (err) {
+          console.error(">>> Transcription Proxy Failure:", err);
+        } finally {
+          setIsTypingIndicatorVisible(false);
+        }
+      };
+
+      // 2. Web Speech API for real-time visual "typing" feedback
+      // @ts-ignore
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event: any) => {
+          let fullTranscript = '';
+          for (let i = 0; i < event.results.length; i++) {
+            fullTranscript += event.results[i][0].transcript;
+          }
+          setCurrentResponse(fullTranscript);
+        };
+
+        recognition.start();
+        recognitionRef.current = recognition;
+      }
+
+      mediaRecorder.start(1000); 
+      console.log(">>> Recording Started.");
+      setIsRecording(true);
+      setRecordingTime(0);
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
+    } catch (err) {
+      console.error(">>> Mic Access DENIED or Error:", err);
     }
   };
 
   const stopRecording = () => {
+    console.log(">>> stopRecording() manually triggered.");
+    
+    // Stop Web Speech API
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+
+    // Stop MediaRecorder
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      console.log(">>> MediaRecorder stop command issued.");
+    }
+    
     setIsRecording(false);
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    if (timerRef.current) clearInterval(timerRef.current);
   };
 
   const handleMicToggle = () => {
@@ -248,31 +298,16 @@ export default function InterviewPage() {
     if (nextIndex < totalCount) {
       setCurrentIndex(nextIndex);
       setIsTypingIndicatorVisible(true);
-
-      // Build history for adaptive question generation
       const history = questions.map((q, i) => ({ question: q, answer: updated[i] ?? '' }));
 
       fetchNextQuestion(prepareData!, history, nextIndex + 1).then((result) => {
-        const q = result?.question ?? 'Can you tell me more about your experience?';
-        const mock = result?.isMock ?? true;
-        setQuestions((prev) => {
-          const arr = [...prev];
-          arr[nextIndex] = q;
-          return arr;
-        });
-        setIsMockQuestion((prev) => {
-          const arr = [...prev];
-          arr[nextIndex] = mock;
-          return arr;
-        });
+        const q = result?.question ?? 'Next question...';
+        setQuestions(prev => { const a = [...prev]; a[nextIndex] = q; return a; });
+        setIsMockQuestion(prev => { const a = [...prev]; a[nextIndex] = result?.isMock ?? true; return a; });
         setIsTypingIndicatorVisible(false);
-        setMessages((prev) => [
-          ...prev,
-          { id: crypto.randomUUID(), role: 'ai', text: q, timestamp: Date.now() },
-        ]);
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'ai', text: q, timestamp: Date.now() }]);
       });
     } else {
-      setIsTypingIndicatorVisible(false);
       sessionStorage.setItem('interviewResults', JSON.stringify({
         domain: prepareData?.domain,
         difficulty: prepareData?.difficulty,
@@ -283,7 +318,7 @@ export default function InterviewPage() {
         resumeId: (prepareData as any).resumeId,
         date: new Date().toISOString(),
       }));
-      setTimeout(() => router.push('/results'), 1500);
+      router.push('/results');
     }
   };
 
@@ -325,8 +360,6 @@ export default function InterviewPage() {
       {/* Background purely for aesthetic depth */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full opacity-20 blur-[120px]" style={{ backgroundColor: 'var(--color-accent)' }} />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full opacity-20 blur-[120px]" style={{ backgroundColor: 'var(--color-secondary)' }} />
-      
-      <Navigation />
       
       <div 
         className="w-full max-w-xl rounded-3xl p-10 bg-black/40 backdrop-blur-xl border relative z-10 shadow-[0_32px_80px_rgba(0,0,0,0.5)]"
@@ -378,7 +411,7 @@ export default function InterviewPage() {
             className="w-full py-4 rounded-xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 transition-all hover:brightness-110 active:scale-[0.98] shadow-lg"
             style={{ backgroundColor: 'var(--color-accent)', color: '#000' }}
           >
-            Begin Calibration <ChevronRight size={18} />
+            Begin Simulation <ChevronRight size={18} />
           </button>
           <button
             onClick={() => router.push('/prepare')}
@@ -437,26 +470,34 @@ export default function InterviewPage() {
     <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
       <Navigation />
 
-      {/* Top bar with End Interview button */}
+      {/* Top bar with Controls */}
       <div
-        style={{
-          display: 'flex',
-          justifyContent: 'flex-end',
-          padding: '0.5rem 1rem',
-          backgroundColor: 'var(--color-background)',
-        }}
+        className="flex justify-end items-center gap-4 px-6 py-2 border-b"
+        style={{ backgroundColor: 'var(--color-background)', borderColor: 'rgba(255,255,255,0.05)' }}
       >
         <button
+          onClick={() => {
+            const newMuted = !isMuted;
+            setIsMuted(newMuted);
+            if (newMuted) stopSpeaking();
+          }}
+          className="p-2 rounded-lg transition-all hover:bg-white/5 group relative"
+          title={isMuted ? "Unmute AI Voice" : "Mute AI Voice"}
+        >
+          {isMuted ? (
+            <VolumeX size={20} className="text-red-400 group-hover:scale-110 transition-transform" />
+          ) : (
+            <Volume2 size={20} style={{ color: 'var(--color-secondary)' }} className="group-hover:scale-110 transition-transform" />
+          )}
+        </button>
+
+        <button
           onClick={handleEndInterview}
-          style={{
-            border: '1px solid var(--color-accent)',
+          className="border px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all hover:brightness-110 active:scale-[0.98]"
+          style={{ 
+            borderColor: 'var(--color-accent)', 
             color: 'var(--color-accent)',
-            backgroundColor: 'transparent',
-            borderRadius: '0.5rem',
-            padding: '0.375rem 0.875rem',
-            fontSize: '0.875rem',
-            fontWeight: 600,
-            cursor: 'pointer',
+            backgroundColor: 'transparent'
           }}
         >
           End Interview

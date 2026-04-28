@@ -12,6 +12,11 @@ export const metadata: Metadata = {
   title: "PrepHire - AI Interview Preparation",
   description: "Master your interviews with AI-powered practice sessions, real-time feedback, and personalized guidance based on your resume and target roles.",
   keywords: ["interview", "preparation", "AI", "practice", "feedback"],
+  icons: {
+    icon: "/sparkless.png",
+    shortcut: "/sparkless.png",
+    apple: "/sparkless.png",
+  },
 };
 
 export default function RootLayout({

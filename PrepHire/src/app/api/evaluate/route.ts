@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
   const allMock = (pairs as QAPair[]).every((p) => p.isMock);
   if (allMock) {
     try {
+      console.log('>>> Using Keyword Fallback for evaluation (All questions were mock)');
       const result = await keywordFallbackEval(pairs, domain);
       return NextResponse.json(result);
     } catch (err) {
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
 
   if (!process.env.GEMINI_API_KEY) {
     try {
+      console.log('>>> Using Keyword Fallback for evaluation (No Gemini API Key)');
       const result = await keywordFallbackEval(pairs, domain);
       return NextResponse.json(result);
     } catch {
@@ -125,7 +127,13 @@ EVALUATION RULES:
 JSON STRUCTURE:
 {
   "perQuestion": [
-    {"score": 0-100, "strength": "1 sentence", "weakness": "1 sentence", "suggestion": "1 sentence"}
+    {
+      "score": 0-100, 
+      "strength": "1 sentence", 
+      "weakness": "1 sentence", 
+      "grammar": "Direct feedback on language, clarity, and grammar (1 sentence)",
+      "suggestion": "1 sentence"
+    }
   ],
   "overall": {
     "score": 0-100,
@@ -137,6 +145,7 @@ JSON STRUCTURE:
 }`;
 
   try {
+    console.log('>>> Using Gemini API for overall evaluation');
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContent(prompt);
     const raw = result.response.text().trim()
@@ -164,6 +173,7 @@ JSON STRUCTURE:
   } catch (err: any) {
     console.error('Gemini evaluation error:', err?.message ?? err);
     try {
+      console.log('>>> Using Keyword Fallback for evaluation (Evaluation Error)');
       const result = await keywordFallbackEval(pairs, domain);
       return NextResponse.json(result);
     } catch {

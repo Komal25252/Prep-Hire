@@ -29,6 +29,80 @@ export default function WebcamPanel({
   const captureIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const lastFearScoreRef = useRef<number | null>(null);
   const scoresBufferRef = useRef<{ scores: any, timestamp: number }[]>([]);
+  const faceMeshRef = useRef<any>(null);
+  const [attentionState, setAttentionState] = useState<'focused' | 'drift' | 'absent'>('focused');
+  const attentionRef = useRef<'focused' | 'drift' | 'absent'>('focused');
+
+  // Load MediaPipe Face Mesh via CDN
+  useEffect(() => {
+    const scripts = [
+      'https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js',
+    ];
+    let loadedCount = 0;
+
+    scripts.forEach(src => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.onload = () => {
+        loadedCount++;
+        if (loadedCount === scripts.length) {
+          initFaceMesh();
+        }
+      };
+      document.head.appendChild(script);
+    });
+
+    const initFaceMesh = () => {
+      // @ts-ignore
+      const faceMesh = new window.FaceMesh({
+        locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      faceMesh.onResults((results: any) => {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+          attentionRef.current = 'absent';
+          setAttentionState('absent');
+          return;
+        }
+
+        const landmarks = results.multiFaceLandmarks[0];
+        // Landmarks: Nose Tip (1), Left Eye Inner (33), Right Eye Inner (263)
+        const nose = landmarks[1];
+        const leftEye = landmarks[33];
+        const rightEye = landmarks[263];
+
+        const eyeCenterX = (leftEye.x + rightEye.x) / 2;
+        const eyeCenterY = (leftEye.y + rightEye.y) / 2;
+
+        const yaw = nose.x - eyeCenterX;
+        const pitch = nose.y - eyeCenterY;
+
+        // Thresholds based on typical "looking at screen" range
+        // Looking away usually results in yaw/pitch > 0.05
+        if (Math.abs(yaw) < 0.06 && Math.abs(pitch) < 0.06) {
+          attentionRef.current = 'focused';
+          setAttentionState('focused');
+        } else {
+          attentionRef.current = 'drift';
+          setAttentionState('drift');
+        }
+      });
+
+      faceMeshRef.current = faceMesh;
+    };
+
+    return () => {
+      if (faceMeshRef.current) faceMeshRef.current.close();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -111,9 +185,14 @@ export default function WebcamPanel({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     
     const frame = canvas.toDataURL('image/jpeg', 0.8);
+
+    // Run FaceMesh for attention tracking
+    if (faceMeshRef.current) {
+      faceMeshRef.current.send({ image: video });
+    }
     
-    // Fire-and-forget POST to Flask
-    fetch('http://localhost:5000/analyze-emotion', {
+    // POST to local Next.js proxy (which forwards to Flask)
+    fetch('/api/emotion/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ frame }),
@@ -157,6 +236,7 @@ export default function WebcamPanel({
           timestamp: new Date().toISOString(),
           emotion,
           scores: avgScores,
+          attention: attentionRef.current, // Sync with MediaPipe state
         }),
       }).catch(() => {});
     })
@@ -241,31 +321,55 @@ export default function WebcamPanel({
             }}
           />
         )}
+
+        {/* Floating Attention Badge */}
+        <div 
+          style={{
+            position: 'absolute',
+            top: '12px',
+            right: '12px',
+            padding: '4px 8px',
+            borderRadius: '6px',
+            fontSize: '10px',
+            fontWeight: 800,
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px',
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            backdropFilter: 'blur(4px)',
+            color: attentionState === 'focused' ? '#4ade80' : attentionState === 'drift' ? '#fbbf24' : '#f87171',
+            border: `1px solid ${attentionState === 'focused' ? '#4ade80' : attentionState === 'drift' ? '#fbbf24' : '#f87171'}44`
+          }}
+        >
+          {attentionState}
+        </div>
       </div>
 
-      {/* AI Interviewer Connected badge */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          backgroundColor: 'var(--color-card)',
-          borderRadius: '8px',
-          padding: '8px 12px',
-        }}
-      >
-        <span
+      {/* Status Badges */}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <div
           style={{
-            width: '8px',
-            height: '8px',
-            borderRadius: '50%',
-            backgroundColor: '#4ade80',
-            flexShrink: 0,
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            backgroundColor: 'var(--color-card)',
+            borderRadius: '8px',
+            padding: '8px 12px',
           }}
-        />
-        <span style={{ color: 'var(--color-secondary)', fontSize: '13px', fontWeight: 600 }}>
-          AI Interviewer Connected
-        </span>
+        >
+          <span
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: '#4ade80',
+              flexShrink: 0,
+            }}
+          />
+          <span style={{ color: 'var(--color-secondary)', fontSize: '13px', fontWeight: 600 }}>
+            AI Connected
+          </span>
+        </div>
       </div>
 
       {/* Session metadata */}

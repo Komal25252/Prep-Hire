@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Background circle -->
+  <rect width="32" height="32" rx="8" fill="#1a1a2e"/>
+  <!-- Sparkles icon (matching lucide-react Sparkles, salmon/coral color) -->
+  <!-- Main 4-point star -->
+  <path d="M16 6 C16 6, 17.2 11.5, 20 14 C17.2 16.5, 16 22, 16 22 C16 22, 14.8 16.5, 12 14 C14.8 11.5, 16 6, 16 6Z" fill="#E8836A"/>
+  <!-- Small top-right star -->
+  <path d="M23 8 C23 8, 23.7 10.5, 25.5 11.5 C23.7 12.5, 23 15, 23 15 C23 15, 22.3 12.5, 20.5 11.5 C22.3 10.5, 23 8, 23 8Z" fill="#E8836A"/>
+  <!-- Small dot bottom-left -->
+  <circle cx="10" cy="20" r="1.5" fill="#E8836A"/>
+</svg>

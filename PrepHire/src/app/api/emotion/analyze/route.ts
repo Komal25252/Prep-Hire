@@ -35,24 +35,8 @@ export async function GET(req: Request) {
       .sort((a, b) => a - b)
       .map((idx) => computePerQuestionMetrics(groups[idx]));
 
-    // Session level
-    // For session level, we can average the metrics or use all readings
-    // Let's use all readings for a global session view
-    const globalMetrics = computePerQuestionMetrics(readings);
-    
-    // Find dominant emotion across all readings
-    const emotionCounts: Record<string, number> = {};
-    readings.forEach(r => {
-      emotionCounts[r.emotion] = (emotionCounts[r.emotion] || 0) + 1;
-    });
-    const dominantEmotion = Object.keys(emotionCounts).reduce((a, b) => emotionCounts[a] > emotionCounts[b] ? a : b);
-
-    const sessionSummary = classifySession({
-      avgVariation: globalMetrics.avgVariation,
-      confidenceScore: globalMetrics.confidenceScore,
-      fearIncrease: globalMetrics.fearIncrease,
-      dominantEmotion,
-    });
+    // Session level - Advanced Temporal Behavioral Analysis
+    const sessionSummary = classifySession(readings);
 
     const timeline = readings.map(r => ({
       timestamp: r.timestamp,
@@ -76,5 +60,24 @@ export async function GET(req: Request) {
       { error: error.message || "Failed to analyze emotions" },
       { status: 500 }
     );
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const { frame } = await req.json();
+    const flaskUrl = process.env.NEXT_PUBLIC_FLASK_URL || "http://localhost:5000";
+    
+    const flaskRes = await fetch(`${flaskUrl}/analyze-emotion`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frame }),
+    });
+
+    const data = await flaskRes.json();
+    return NextResponse.json(data);
+  } catch (error: any) {
+    console.error("Emotion proxy error:", error);
+    return NextResponse.json({ error: "Flask server unreachable" }, { status: 500 });
   }
 }
